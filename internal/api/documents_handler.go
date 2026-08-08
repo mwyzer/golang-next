@@ -18,6 +18,8 @@ import (
 
 type DocumentsHandler struct {
 	Repo          *db.DocumentRepo
+	AgentRuns     *db.AgentRunRepo
+	ToolExecs     *db.ToolExecutionRepo
 	Store         storage.Store
 	MaxUploadSize int64
 }
@@ -112,6 +114,58 @@ func (h *DocumentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		"overall_confidence":        doc.OverallConfidence,
 		"created_at":                doc.CreatedAt,
 	})
+}
+
+// ListAgentRuns implements GET /documents/{id}/agent-runs.
+func (h *DocumentsHandler) ListAgentRuns(w http.ResponseWriter, r *http.Request) {
+	tenantID := tenantIDFromContext(r.Context())
+	id := chi.URLParam(r, "id")
+
+	// Confirm the document exists and belongs to this tenant before
+	// exposing its agent runs (NFR-5).
+	if _, err := h.Repo.GetByID(r.Context(), tenantID, id); errors.Is(err, domain.ErrDocumentNotFound) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "document not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "DB_ERROR", "failed to load document")
+		return
+	}
+
+	runs, err := h.AgentRuns.ListByDocument(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DB_ERROR", "failed to load agent runs")
+		return
+	}
+
+	type runView struct {
+		AgentRunID     string                 `json:"agent_run_id"`
+		Status         domain.AgentRunStatus  `json:"status"`
+		IterationCount int                    `json:"iteration_count"`
+		MaxIterations  int                    `json:"max_iterations"`
+		TraceID        string                 `json:"trace_id"`
+		StartedAt      string                 `json:"started_at"`
+		ToolExecutions []domain.ToolExecution `json:"tool_executions"`
+	}
+
+	views := make([]runView, 0, len(runs))
+	for _, run := range runs {
+		execs, err := h.ToolExecs.ListByAgentRun(r.Context(), run.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "DB_ERROR", "failed to load tool executions")
+			return
+		}
+		views = append(views, runView{
+			AgentRunID:     run.ID,
+			Status:         run.Status,
+			IterationCount: run.IterationCount,
+			MaxIterations:  run.MaxIterations,
+			TraceID:        run.TraceID,
+			StartedAt:      run.StartedAt.Format("2006-01-02T15:04:05Z07:00"),
+			ToolExecutions: execs,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"agent_runs": views})
 }
 
 // detectMimeType prefers the client-supplied Content-Type but falls back

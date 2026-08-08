@@ -1,20 +1,27 @@
-// Agent worker entrypoint. Currently a placeholder: it connects to the
-// database so the container is viable in docker-compose, but does not
-// yet consume a job queue or run the agent loop described in
-// docs/architecture/agent-architecture.md. That lands with the
-// Document Classification / Structured Extraction features.
+// Agent worker entrypoint. Polls for UPLOADED documents and runs the
+// agent workflow (docs/architecture/agent-architecture.md) against
+// them. See internal/agent for the workflow itself.
 package main
 
 import (
 	"context"
 	"log"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"golang-nextjs/internal/agent"
 	"golang-nextjs/internal/config"
 	"golang-nextjs/internal/db"
+	"golang-nextjs/internal/providers/llm"
+	"golang-nextjs/internal/providers/ocr"
+	"golang-nextjs/internal/storage"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	cfg := config.Load()
 
 	pool, err := db.Connect(ctx, cfg.DatabaseURL)
@@ -23,6 +30,49 @@ func main() {
 	}
 	defer pool.Close()
 
-	log.Println("worker connected to database; job queue consumer not yet implemented")
-	select {}
+	if err := db.Migrate(ctx, pool); err != nil {
+		log.Fatalf("run migrations: %v", err)
+	}
+
+	store, err := storage.NewLocalStore(cfg.StorageRoot)
+	if err != nil {
+		log.Fatalf("init storage: %v", err)
+	}
+
+	runner := &agent.Runner{
+		Pool:           pool,
+		Documents:      db.NewDocumentRepo(pool),
+		AgentRuns:      db.NewAgentRunRepo(pool),
+		ToolExecutions: db.NewToolExecutionRepo(pool),
+		Reviews:        db.NewReviewTaskRepo(pool),
+		Audit:          db.NewAuditLogRepo(pool),
+		OCR:            ocr.StubProvider{Store: store},
+		LLM:            llm.StubProvider{},
+		MaxIterations:  int(cfg.MaxAgentIterations),
+	}
+
+	pollInterval := time.Duration(cfg.PollIntervalSecs) * time.Second
+	log.Printf("worker started, polling every %s", pollInterval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("worker shutting down")
+			return
+		default:
+		}
+
+		processed, err := runner.PollOnce(ctx)
+		if err != nil {
+			log.Printf("poll error: %v", err)
+		}
+		if !processed {
+			select {
+			case <-ctx.Done():
+				log.Println("worker shutting down")
+				return
+			case <-time.After(pollInterval):
+			}
+		}
+	}
 }

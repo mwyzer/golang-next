@@ -12,6 +12,8 @@ import (
 
 type Deps struct {
 	Repo          *db.DocumentRepo
+	AgentRuns     *db.AgentRunRepo
+	ToolExecs     *db.ToolExecutionRepo
 	Store         storage.Store
 	MaxUploadSize int64
 	APIToken      string
@@ -20,6 +22,8 @@ type Deps struct {
 func NewRouter(deps Deps) http.Handler {
 	docs := &DocumentsHandler{
 		Repo:          deps.Repo,
+		AgentRuns:     deps.AgentRuns,
+		ToolExecs:     deps.ToolExecs,
 		Store:         deps.Store,
 		MaxUploadSize: deps.MaxUploadSize,
 	}
@@ -38,6 +42,7 @@ func NewRouter(deps Deps) http.Handler {
 		r.Use(RequireAuth(deps.APIToken))
 		r.Post("/documents", docs.Upload)
 		r.Get("/documents/{id}", docs.Get)
+		r.Get("/documents/{id}/agent-runs", docs.ListAgentRuns)
 	})
 
 	return r

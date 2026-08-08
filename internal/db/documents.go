@@ -59,6 +59,80 @@ func (r *DocumentRepo) GetByID(ctx context.Context, tenantID, id string) (domain
 	return d, nil
 }
 
+// GetByIDAny fetches a document without a tenant filter. It's for
+// internal worker use only (the agent runs across tenants); API
+// handlers must use GetByID so cross-tenant access stays impossible
+// (NFR-5).
+func (r *DocumentRepo) GetByIDAny(ctx context.Context, id string) (domain.Document, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, uploaded_by, document_type_id, status, file_path,
+		       mime_type, file_size_bytes, content_hash, classification_confidence,
+		       overall_confidence, is_duplicate, duplicate_of_document_id,
+		       created_at, updated_at
+		FROM documents
+		WHERE id = $1`, id)
+
+	var d domain.Document
+	err := row.Scan(
+		&d.ID, &d.TenantID, &d.UploadedBy, &d.DocumentTypeID, &d.Status, &d.FilePath,
+		&d.MimeType, &d.FileSizeBytes, &d.ContentHash, &d.ClassificationConfidence,
+		&d.OverallConfidence, &d.IsDuplicate, &d.DuplicateOfDocumentID,
+		&d.CreatedAt, &d.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Document{}, domain.ErrDocumentNotFound
+	}
+	if err != nil {
+		return domain.Document{}, fmt.Errorf("get document: %w", err)
+	}
+	return d, nil
+}
+
+// MarkClassified persists a successful classification result (SRS
+// Feature: Document Classification).
+func (r *DocumentRepo) MarkClassified(ctx context.Context, id, documentTypeID string, confidence float64) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents
+		SET document_type_id = $1, classification_confidence = $2,
+		    status = $3, updated_at = now()
+		WHERE id = $4`,
+		documentTypeID, confidence, domain.StatusClassified, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark document classified: %w", err)
+	}
+	return nil
+}
+
+// MarkPendingReview moves a document into human review, optionally
+// recording the classification confidence that triggered it.
+func (r *DocumentRepo) MarkPendingReview(ctx context.Context, id string, confidence *float64) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents
+		SET status = $1, classification_confidence = $2, updated_at = now()
+		WHERE id = $3`,
+		domain.StatusPendingReview, confidence, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark document pending review: %w", err)
+	}
+	return nil
+}
+
+// MarkFailed records that agent processing could not complete (FR-20).
+func (r *DocumentRepo) MarkFailed(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents
+		SET status = $1, updated_at = now()
+		WHERE id = $2`,
+		domain.StatusFailed, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark document failed: %w", err)
+	}
+	return nil
+}
+
 // FindByContentHash returns the first document with a matching content
 // hash for the tenant, used for exact-duplicate detection (FR-10).
 func (r *DocumentRepo) FindByContentHash(ctx context.Context, tenantID, hash string) (domain.Document, bool, error) {

@@ -32,6 +32,8 @@ func main() {
 
 	router := api.NewRouter(api.Deps{
 		Repo:          db.NewDocumentRepo(pool),
+		AgentRuns:     db.NewAgentRunRepo(pool),
+		ToolExecs:     db.NewToolExecutionRepo(pool),
 		Store:         store,
 		MaxUploadSize: cfg.MaxUploadBytes,
 		APIToken:      cfg.APIToken,

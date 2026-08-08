@@ -2,6 +2,17 @@ package domain
 
 import "time"
 
+// Document type IDs, matching the seeded rows in
+// db/migrations/000002_seed_dev_data.up.sql. "unknown" is not a stored
+// document_types row — it signals the classifier couldn't confidently
+// match one of the supported types (SRS Feature: Document Classification).
+const (
+	DocumentTypeInvoice = "invoice"
+	DocumentTypeReceipt = "receipt"
+	DocumentTypeCV      = "cv"
+	DocumentTypeUnknown = "unknown"
+)
+
 type DocumentStatus string
 
 const (

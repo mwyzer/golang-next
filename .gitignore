@@ -1,0 +1,30 @@
+# Go
+/bin/
+*.exe
+*.test
+*.out
+
+# Env
+.env
+.env.local
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+web/node_modules/
+*.tsbuildinfo
+
+# Storage (local dev document uploads)
+/data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Local Claude Code session state
+.claude/

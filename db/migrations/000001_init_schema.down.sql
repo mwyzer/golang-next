@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS knowledge_chunks;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS review_tasks;
+DROP TABLE IF EXISTS tool_executions;
+DROP TABLE IF EXISTS agent_runs;
+DROP TABLE IF EXISTS extracted_fields;
+DROP TABLE IF EXISTS documents;
+DROP TABLE IF EXISTS document_types;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS tenants;

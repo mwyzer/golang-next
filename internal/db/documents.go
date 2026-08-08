@@ -119,12 +119,30 @@ func (r *DocumentRepo) MarkExtracted(ctx context.Context, id string) error {
 	return nil
 }
 
-// MarkPendingReview moves a document into human review, optionally
-// recording the classification confidence that triggered it.
+// MarkValidated records that a document passed validation (SRS Feature: Validation).
+func (r *DocumentRepo) MarkValidated(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents
+		SET status = $1, updated_at = now()
+		WHERE id = $2`,
+		domain.StatusValidated, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark document validated: %w", err)
+	}
+	return nil
+}
+
+// MarkPendingReview moves a document into human review. confidence is
+// optional (e.g. an unknown-classification routing wants to record it;
+// a validation-failure routing doesn't have a new value to set) — pass
+// nil to leave the existing classification_confidence untouched.
 func (r *DocumentRepo) MarkPendingReview(ctx context.Context, id string, confidence *float64) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE documents
-		SET status = $1, classification_confidence = $2, updated_at = now()
+		SET status = $1,
+		    classification_confidence = COALESCE($2, classification_confidence),
+		    updated_at = now()
 		WHERE id = $3`,
 		domain.StatusPendingReview, confidence, id,
 	)

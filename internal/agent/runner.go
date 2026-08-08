@@ -1,7 +1,7 @@
 // Package agent implements the AI Agent workflow described in
-// docs/architecture/agent-architecture.md. This slice implements only
-// the Document Classification feature (SRS): run_ocr -> classify_document,
-// then either mark the document CLASSIFIED or route it to human review.
+// docs/architecture/agent-architecture.md: run_ocr -> classify_document
+// -> extract_fields -> validate_extraction, routing to human review
+// whenever classification is uncertain or validation fails.
 package agent
 
 import (
@@ -15,12 +15,14 @@ import (
 	"golang-nextjs/internal/domain"
 	"golang-nextjs/internal/providers/llm"
 	"golang-nextjs/internal/providers/ocr"
+	"golang-nextjs/internal/validation"
 )
 
 const (
-	toolRunOCR           = "run_ocr"
-	toolClassifyDocument = "classify_document"
-	toolExtractFields    = "extract_fields"
+	toolRunOCR             = "run_ocr"
+	toolClassifyDocument   = "classify_document"
+	toolExtractFields      = "extract_fields"
+	toolValidateExtraction = "validate_extraction"
 
 	auditActorAgent = "agent"
 )
@@ -101,7 +103,9 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		domain.ToolExecutionSuccess)
 
 	if result.DocumentType == domain.DocumentTypeUnknown {
-		r.routeToReview(ctx, doc.TenantID, documentID, agentRunID, iterations, result.Confidence)
+		confidence := result.Confidence
+		r.routeToReview(ctx, doc.TenantID, documentID, agentRunID, iterations,
+			domain.ReviewReasonUnknownType, &confidence, map[string]any{})
 		return
 	}
 
@@ -168,33 +172,68 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "persist_extracted_status_failed")
 		return
 	}
-
-	if err := r.AgentRuns.Finish(ctx, agentRunID, domain.AgentRunCompleted, iterations); err != nil {
-		log.Printf("agent run %s: finish: %v", agentRunID, err)
-	}
 	_ = r.Audit.Record(ctx, doc.TenantID, auditActorAgent, "document.extracted",
 		domain.AuditEntityDocument, documentID,
 		map[string]any{"field_count": len(fields), "missing_count": missing, "agent_run_id": agentRunID})
 
-	log.Printf("agent run %s: document %s extracted %d fields (%d missing)",
+	// Step 4: validate_extraction
+	iterations++
+	if iterations > r.MaxIterations {
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "max_iterations_exceeded")
+		return
+	}
+	values := make(map[string]any, len(extraction.Fields))
+	for name, fe := range extraction.Fields {
+		values[name] = fe.Value
+	}
+	violations := validation.Validate(schema, values)
+	validateInput := map[string]any{"document_id": documentID, "document_type": result.DocumentType}
+	_ = r.ToolExecutions.Record(ctx, agentRunID, toolValidateExtraction, validateInput,
+		map[string]any{"valid": len(violations) == 0, "violations": violations}, domain.ToolExecutionSuccess)
+
+	if len(violations) > 0 {
+		r.routeToReview(ctx, doc.TenantID, documentID, agentRunID, iterations,
+			domain.ReviewReasonValidationFailed, nil, map[string]any{"violations": violations})
+		return
+	}
+
+	if err := r.Documents.MarkValidated(ctx, documentID); err != nil {
+		log.Printf("agent run %s: mark validated: %v", agentRunID, err)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "persist_validated_status_failed")
+		return
+	}
+
+	if err := r.AgentRuns.Finish(ctx, agentRunID, domain.AgentRunCompleted, iterations); err != nil {
+		log.Printf("agent run %s: finish: %v", agentRunID, err)
+	}
+	_ = r.Audit.Record(ctx, doc.TenantID, auditActorAgent, "document.validated",
+		domain.AuditEntityDocument, documentID,
+		map[string]any{"agent_run_id": agentRunID})
+
+	log.Printf("agent run %s: document %s validated (%d fields extracted, %d missing)",
 		agentRunID, documentID, len(fields), missing)
 }
 
-func (r *Runner) routeToReview(ctx context.Context, tenantID, documentID, agentRunID string, iterations int, confidence float64) {
-	if err := r.Reviews.Create(ctx, documentID, domain.ReviewReasonUnknownType); err != nil {
+// routeToReview opens a review task, moves the document to
+// PENDING_REVIEW, and finishes the agent run as COMPLETED (routing to a
+// human is a normal outcome, not a processing failure). confidence is
+// optional — see DocumentRepo.MarkPendingReview.
+func (r *Runner) routeToReview(ctx context.Context, tenantID, documentID, agentRunID string, iterations int, reason domain.ReviewReason, confidence *float64, auditMetadata map[string]any) {
+	if err := r.Reviews.Create(ctx, documentID, reason); err != nil {
 		log.Printf("agent run %s: create review task: %v", agentRunID, err)
 	}
-	if err := r.Documents.MarkPendingReview(ctx, documentID, &confidence); err != nil {
+	if err := r.Documents.MarkPendingReview(ctx, documentID, confidence); err != nil {
 		log.Printf("agent run %s: mark pending review: %v", agentRunID, err)
 	}
 	if err := r.AgentRuns.Finish(ctx, agentRunID, domain.AgentRunCompleted, iterations); err != nil {
 		log.Printf("agent run %s: finish: %v", agentRunID, err)
 	}
+	auditMetadata["reason"] = reason
+	auditMetadata["agent_run_id"] = agentRunID
 	_ = r.Audit.Record(ctx, tenantID, auditActorAgent, "document.routed_to_review",
-		domain.AuditEntityDocument, documentID,
-		map[string]any{"reason": domain.ReviewReasonUnknownType, "agent_run_id": agentRunID})
+		domain.AuditEntityDocument, documentID, auditMetadata)
 
-	log.Printf("agent run %s: document %s routed to human review (unknown type)", agentRunID, documentID)
+	log.Printf("agent run %s: document %s routed to human review (%s)", agentRunID, documentID, reason)
 }
 
 func (r *Runner) fail(ctx context.Context, tenantID, documentID, agentRunID string, iterations int, reason string) {

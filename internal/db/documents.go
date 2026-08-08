@@ -104,6 +104,21 @@ func (r *DocumentRepo) MarkClassified(ctx context.Context, id, documentTypeID st
 	return nil
 }
 
+// MarkExtracted records that structured extraction completed (SRS
+// Feature: Structured Extraction).
+func (r *DocumentRepo) MarkExtracted(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents
+		SET status = $1, updated_at = now()
+		WHERE id = $2`,
+		domain.StatusExtracted, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark document extracted: %w", err)
+	}
+	return nil
+}
+
 // MarkPendingReview moves a document into human review, optionally
 // recording the classification confidence that triggered it.
 func (r *DocumentRepo) MarkPendingReview(ctx context.Context, id string, confidence *float64) error {

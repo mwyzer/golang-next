@@ -20,20 +20,23 @@ import (
 const (
 	toolRunOCR           = "run_ocr"
 	toolClassifyDocument = "classify_document"
+	toolExtractFields    = "extract_fields"
 
 	auditActorAgent = "agent"
 )
 
 type Runner struct {
-	Pool           *pgxpool.Pool
-	Documents      *db.DocumentRepo
-	AgentRuns      *db.AgentRunRepo
-	ToolExecutions *db.ToolExecutionRepo
-	Reviews        *db.ReviewTaskRepo
-	Audit          *db.AuditLogRepo
-	OCR            ocr.Provider
-	LLM            llm.Provider
-	MaxIterations  int
+	Pool            *pgxpool.Pool
+	Documents       *db.DocumentRepo
+	DocumentTypes   *db.DocumentTypeRepo
+	ExtractedFields *db.ExtractedFieldRepo
+	AgentRuns       *db.AgentRunRepo
+	ToolExecutions  *db.ToolExecutionRepo
+	Reviews         *db.ReviewTaskRepo
+	Audit           *db.AuditLogRepo
+	OCR             ocr.Provider
+	LLM             llm.Provider
+	MaxIterations   int
 }
 
 // PollOnce claims and fully processes at most one UPLOADED document. It
@@ -107,16 +110,74 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "persist_classification_failed")
 		return
 	}
-
-	if err := r.AgentRuns.Finish(ctx, agentRunID, domain.AgentRunCompleted, iterations); err != nil {
-		log.Printf("agent run %s: finish: %v", agentRunID, err)
-	}
 	_ = r.Audit.Record(ctx, doc.TenantID, auditActorAgent, "document.classified",
 		domain.AuditEntityDocument, documentID,
 		map[string]any{"document_type": result.DocumentType, "confidence": result.Confidence, "agent_run_id": agentRunID})
 
-	log.Printf("agent run %s: document %s classified as %s (confidence %.2f)",
-		agentRunID, documentID, result.DocumentType, result.Confidence)
+	// Step 3: extract_fields
+	iterations++
+	if iterations > r.MaxIterations {
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "max_iterations_exceeded")
+		return
+	}
+	schema, err := r.DocumentTypes.GetFieldSchema(ctx, result.DocumentType)
+	if err != nil {
+		log.Printf("agent run %s: load field schema: %v", agentRunID, err)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "load_field_schema_failed")
+		return
+	}
+
+	extraction, err := r.LLM.Extract(ctx, text, schema)
+	extractInput := map[string]any{"document_id": documentID, "document_type": result.DocumentType, "schema": schema}
+	if err != nil {
+		_ = r.ToolExecutions.Record(ctx, agentRunID, toolExtractFields, extractInput,
+			map[string]any{"error": err.Error()}, domain.ToolExecutionFailed)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "extraction_failed")
+		return
+	}
+
+	fields := make([]domain.ExtractedField, 0, len(extraction.Fields))
+	extractOutput := make(map[string]any, len(extraction.Fields))
+	missing := 0
+	for name, fe := range extraction.Fields {
+		fields = append(fields, domain.ExtractedField{
+			DocumentID: documentID,
+			FieldName:  name,
+			Value:      fe.Value,
+			Confidence: fe.Confidence,
+			Source:     domain.ExtractedFieldSourceExtraction,
+		})
+		extractOutput[name] = map[string]any{"value": fe.Value, "confidence": fe.Confidence}
+		if fe.Value == nil {
+			missing++
+		}
+	}
+
+	if err := r.ExtractedFields.InsertBatch(ctx, documentID, fields); err != nil {
+		log.Printf("agent run %s: persist extracted fields: %v", agentRunID, err)
+		_ = r.ToolExecutions.Record(ctx, agentRunID, toolExtractFields, extractInput,
+			map[string]any{"error": err.Error()}, domain.ToolExecutionFailed)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "persist_extracted_fields_failed")
+		return
+	}
+	_ = r.ToolExecutions.Record(ctx, agentRunID, toolExtractFields, extractInput,
+		extractOutput, domain.ToolExecutionSuccess)
+
+	if err := r.Documents.MarkExtracted(ctx, documentID); err != nil {
+		log.Printf("agent run %s: mark extracted: %v", agentRunID, err)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "persist_extracted_status_failed")
+		return
+	}
+
+	if err := r.AgentRuns.Finish(ctx, agentRunID, domain.AgentRunCompleted, iterations); err != nil {
+		log.Printf("agent run %s: finish: %v", agentRunID, err)
+	}
+	_ = r.Audit.Record(ctx, doc.TenantID, auditActorAgent, "document.extracted",
+		domain.AuditEntityDocument, documentID,
+		map[string]any{"field_count": len(fields), "missing_count": missing, "agent_run_id": agentRunID})
+
+	log.Printf("agent run %s: document %s extracted %d fields (%d missing)",
+		agentRunID, documentID, len(fields), missing)
 }
 
 func (r *Runner) routeToReview(ctx context.Context, tenantID, documentID, agentRunID string, iterations int, confidence float64) {

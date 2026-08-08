@@ -31,12 +31,13 @@ func main() {
 	}
 
 	router := api.NewRouter(api.Deps{
-		Repo:          db.NewDocumentRepo(pool),
-		AgentRuns:     db.NewAgentRunRepo(pool),
-		ToolExecs:     db.NewToolExecutionRepo(pool),
-		Store:         store,
-		MaxUploadSize: cfg.MaxUploadBytes,
-		APIToken:      cfg.APIToken,
+		Repo:            db.NewDocumentRepo(pool),
+		AgentRuns:       db.NewAgentRunRepo(pool),
+		ToolExecs:       db.NewToolExecutionRepo(pool),
+		ExtractedFields: db.NewExtractedFieldRepo(pool),
+		Store:           store,
+		MaxUploadSize:   cfg.MaxUploadBytes,
+		APIToken:        cfg.APIToken,
 	})
 
 	log.Printf("api listening on :%s", cfg.Port)

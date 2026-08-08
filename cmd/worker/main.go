@@ -40,15 +40,17 @@ func main() {
 	}
 
 	runner := &agent.Runner{
-		Pool:           pool,
-		Documents:      db.NewDocumentRepo(pool),
-		AgentRuns:      db.NewAgentRunRepo(pool),
-		ToolExecutions: db.NewToolExecutionRepo(pool),
-		Reviews:        db.NewReviewTaskRepo(pool),
-		Audit:          db.NewAuditLogRepo(pool),
-		OCR:            ocr.StubProvider{Store: store},
-		LLM:            llm.StubProvider{},
-		MaxIterations:  int(cfg.MaxAgentIterations),
+		Pool:            pool,
+		Documents:       db.NewDocumentRepo(pool),
+		DocumentTypes:   db.NewDocumentTypeRepo(pool),
+		ExtractedFields: db.NewExtractedFieldRepo(pool),
+		AgentRuns:       db.NewAgentRunRepo(pool),
+		ToolExecutions:  db.NewToolExecutionRepo(pool),
+		Reviews:         db.NewReviewTaskRepo(pool),
+		Audit:           db.NewAuditLogRepo(pool),
+		OCR:             ocr.StubProvider{Store: store},
+		LLM:             llm.StubProvider{},
+		MaxIterations:   int(cfg.MaxAgentIterations),
 	}
 
 	pollInterval := time.Duration(cfg.PollIntervalSecs) * time.Second

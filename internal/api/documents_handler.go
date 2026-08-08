@@ -17,11 +17,12 @@ import (
 )
 
 type DocumentsHandler struct {
-	Repo          *db.DocumentRepo
-	AgentRuns     *db.AgentRunRepo
-	ToolExecs     *db.ToolExecutionRepo
-	Store         storage.Store
-	MaxUploadSize int64
+	Repo            *db.DocumentRepo
+	AgentRuns       *db.AgentRunRepo
+	ToolExecs       *db.ToolExecutionRepo
+	ExtractedFields *db.ExtractedFieldRepo
+	Store           storage.Store
+	MaxUploadSize   int64
 }
 
 // Upload implements POST /documents (docs/technical-design/api.md,
@@ -106,12 +107,24 @@ func (h *DocumentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	extractedFields, err := h.ExtractedFields.ListByDocument(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DB_ERROR", "failed to load extracted fields")
+		return
+	}
+
+	fields := make(map[string]any, len(extractedFields))
+	for _, f := range extractedFields {
+		fields[f.FieldName] = map[string]any{"value": f.Value, "confidence": f.Confidence}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"document_id":               doc.ID,
 		"status":                    doc.Status,
 		"document_type":             doc.DocumentTypeID,
 		"classification_confidence": doc.ClassificationConfidence,
 		"overall_confidence":        doc.OverallConfidence,
+		"fields":                    fields,
 		"created_at":                doc.CreatedAt,
 	})
 }

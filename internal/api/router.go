@@ -11,21 +11,23 @@ import (
 )
 
 type Deps struct {
-	Repo          *db.DocumentRepo
-	AgentRuns     *db.AgentRunRepo
-	ToolExecs     *db.ToolExecutionRepo
-	Store         storage.Store
-	MaxUploadSize int64
-	APIToken      string
+	Repo            *db.DocumentRepo
+	AgentRuns       *db.AgentRunRepo
+	ToolExecs       *db.ToolExecutionRepo
+	ExtractedFields *db.ExtractedFieldRepo
+	Store           storage.Store
+	MaxUploadSize   int64
+	APIToken        string
 }
 
 func NewRouter(deps Deps) http.Handler {
 	docs := &DocumentsHandler{
-		Repo:          deps.Repo,
-		AgentRuns:     deps.AgentRuns,
-		ToolExecs:     deps.ToolExecs,
-		Store:         deps.Store,
-		MaxUploadSize: deps.MaxUploadSize,
+		Repo:            deps.Repo,
+		AgentRuns:       deps.AgentRuns,
+		ToolExecs:       deps.ToolExecs,
+		ExtractedFields: deps.ExtractedFields,
+		Store:           deps.Store,
+		MaxUploadSize:   deps.MaxUploadSize,
 	}
 
 	r := chi.NewRouter()

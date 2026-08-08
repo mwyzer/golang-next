@@ -23,7 +23,7 @@ func Load() Config {
 		MaxUploadBytes:     getEnvInt64("MAX_UPLOAD_BYTES", 20*1024*1024), // 20MB default
 		APIToken:           getEnv("API_TOKEN", "dev-token"),
 		PollIntervalSecs:   getEnvInt64("POLL_INTERVAL_SECONDS", 3),
-		MaxAgentIterations: getEnvInt64("MAX_AGENT_ITERATIONS", 5),
+		MaxAgentIterations: getEnvInt64("MAX_AGENT_ITERATIONS", 10), // full pipeline is 7 steps; leaves headroom
 	}
 }
 

@@ -133,21 +133,56 @@ func (r *DocumentRepo) MarkValidated(ctx context.Context, id string) error {
 	return nil
 }
 
-// MarkPendingReview moves a document into human review. confidence is
-// optional (e.g. an unknown-classification routing wants to record it;
-// a validation-failure routing doesn't have a new value to set) — pass
-// nil to leave the existing classification_confidence untouched.
-func (r *DocumentRepo) MarkPendingReview(ctx context.Context, id string, confidence *float64) error {
+// MarkPendingReview moves a document into human review. Both confidence
+// values are optional and independent: classificationConfidence is set
+// by the unknown-type routing path, overallConfidence by the
+// low-confidence routing path; validation-failure and duplicate routing
+// pass nil for both. A nil leaves the existing column untouched — they
+// are never used to blank out a value the document already has.
+func (r *DocumentRepo) MarkPendingReview(ctx context.Context, id string, classificationConfidence, overallConfidence *float64) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE documents
 		SET status = $1,
 		    classification_confidence = COALESCE($2, classification_confidence),
+		    overall_confidence = COALESCE($3, overall_confidence),
 		    updated_at = now()
-		WHERE id = $3`,
-		domain.StatusPendingReview, confidence, id,
+		WHERE id = $4`,
+		domain.StatusPendingReview, classificationConfidence, overallConfidence, id,
 	)
 	if err != nil {
 		return fmt.Errorf("mark document pending review: %w", err)
+	}
+	return nil
+}
+
+// MarkDuplicateOf flags a document as a duplicate of an earlier one
+// (SRS Feature: Duplicate Detection, FR-10). It does not change status —
+// callers route the document to review separately.
+func (r *DocumentRepo) MarkDuplicateOf(ctx context.Context, id, duplicateOfID string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents
+		SET is_duplicate = true, duplicate_of_document_id = $1, updated_at = now()
+		WHERE id = $2`,
+		duplicateOfID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark document duplicate: %w", err)
+	}
+	return nil
+}
+
+// MarkAutoProcessed records that a document cleared every gate
+// (classification, validation, duplicate check, confidence threshold)
+// and was finalized without human review (finalize_document tool).
+func (r *DocumentRepo) MarkAutoProcessed(ctx context.Context, id string, overallConfidence float64) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents
+		SET status = $1, overall_confidence = $2, updated_at = now()
+		WHERE id = $3`,
+		domain.StatusAutoProcessed, overallConfidence, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark document auto processed: %w", err)
 	}
 	return nil
 }

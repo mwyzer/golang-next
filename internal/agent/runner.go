@@ -1,7 +1,9 @@
 // Package agent implements the AI Agent workflow described in
 // docs/architecture/agent-architecture.md: run_ocr -> classify_document
-// -> extract_fields -> validate_extraction, routing to human review
-// whenever classification is uncertain or validation fails.
+// -> extract_fields -> validate_extraction -> check_duplicate ->
+// calculate_confidence -> finalize_document, routing to human review at
+// the first gate that fails (unknown type, validation, duplicate, or
+// confidence below the document type's auto-process threshold).
 package agent
 
 import (
@@ -19,10 +21,13 @@ import (
 )
 
 const (
-	toolRunOCR             = "run_ocr"
-	toolClassifyDocument   = "classify_document"
-	toolExtractFields      = "extract_fields"
-	toolValidateExtraction = "validate_extraction"
+	toolRunOCR              = "run_ocr"
+	toolClassifyDocument    = "classify_document"
+	toolExtractFields       = "extract_fields"
+	toolValidateExtraction  = "validate_extraction"
+	toolCheckDuplicate      = "check_duplicate"
+	toolCalculateConfidence = "calculate_confidence"
+	toolFinalizeDocument    = "finalize_document"
 
 	auditActorAgent = "agent"
 )
@@ -103,9 +108,9 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		domain.ToolExecutionSuccess)
 
 	if result.DocumentType == domain.DocumentTypeUnknown {
-		confidence := result.Confidence
+		classificationConfidence := result.Confidence
 		r.routeToReview(ctx, doc.TenantID, documentID, agentRunID, iterations,
-			domain.ReviewReasonUnknownType, &confidence, map[string]any{})
+			domain.ReviewReasonUnknownType, &classificationConfidence, nil, map[string]any{})
 		return
 	}
 
@@ -193,7 +198,7 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 
 	if len(violations) > 0 {
 		r.routeToReview(ctx, doc.TenantID, documentID, agentRunID, iterations,
-			domain.ReviewReasonValidationFailed, nil, map[string]any{"violations": violations})
+			domain.ReviewReasonValidationFailed, nil, nil, map[string]any{"violations": violations})
 		return
 	}
 
@@ -202,27 +207,113 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "persist_validated_status_failed")
 		return
 	}
-
-	if err := r.AgentRuns.Finish(ctx, agentRunID, domain.AgentRunCompleted, iterations); err != nil {
-		log.Printf("agent run %s: finish: %v", agentRunID, err)
-	}
 	_ = r.Audit.Record(ctx, doc.TenantID, auditActorAgent, "document.validated",
 		domain.AuditEntityDocument, documentID,
 		map[string]any{"agent_run_id": agentRunID})
 
-	log.Printf("agent run %s: document %s validated (%d fields extracted, %d missing)",
-		agentRunID, documentID, len(fields), missing)
+	// Step 5: check_duplicate
+	iterations++
+	if iterations > r.MaxIterations {
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "max_iterations_exceeded")
+		return
+	}
+	earliest, foundAny, err := r.Documents.FindByContentHash(ctx, doc.TenantID, doc.ContentHash)
+	checkDupInput := map[string]any{"document_id": documentID, "content_hash": doc.ContentHash}
+	if err != nil {
+		_ = r.ToolExecutions.Record(ctx, agentRunID, toolCheckDuplicate, checkDupInput,
+			map[string]any{"error": err.Error()}, domain.ToolExecutionFailed)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "duplicate_check_failed")
+		return
+	}
+	isDuplicate := foundAny && earliest.ID != documentID
+	checkDupOutput := map[string]any{"is_duplicate": isDuplicate}
+	if isDuplicate {
+		checkDupOutput["duplicate_of"] = earliest.ID
+	}
+	_ = r.ToolExecutions.Record(ctx, agentRunID, toolCheckDuplicate, checkDupInput, checkDupOutput, domain.ToolExecutionSuccess)
+
+	if isDuplicate {
+		if err := r.Documents.MarkDuplicateOf(ctx, documentID, earliest.ID); err != nil {
+			log.Printf("agent run %s: mark duplicate: %v", agentRunID, err)
+		}
+		r.routeToReview(ctx, doc.TenantID, documentID, agentRunID, iterations,
+			domain.ReviewReasonDuplicate, nil, nil, map[string]any{"duplicate_of": earliest.ID})
+		return
+	}
+
+	// Step 6: calculate_confidence
+	iterations++
+	if iterations > r.MaxIterations {
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "max_iterations_exceeded")
+		return
+	}
+	threshold, err := r.DocumentTypes.GetAutoProcessThreshold(ctx, result.DocumentType)
+	if err != nil {
+		log.Printf("agent run %s: load auto-process threshold: %v", agentRunID, err)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "load_threshold_failed")
+		return
+	}
+
+	confidenceSum := result.Confidence
+	confidenceCount := 1
+	for _, fe := range extraction.Fields {
+		confidenceSum += fe.Confidence
+		confidenceCount++
+	}
+	overallConfidence := confidenceSum / float64(confidenceCount)
+
+	calcInput := map[string]any{
+		"document_id":               documentID,
+		"classification_confidence": result.Confidence,
+		"field_count":               len(extraction.Fields),
+	}
+	_ = r.ToolExecutions.Record(ctx, agentRunID, toolCalculateConfidence, calcInput,
+		map[string]any{"overall_confidence": overallConfidence, "threshold": threshold}, domain.ToolExecutionSuccess)
+
+	if overallConfidence < threshold {
+		lowConfidence := overallConfidence
+		r.routeToReview(ctx, doc.TenantID, documentID, agentRunID, iterations,
+			domain.ReviewReasonLowConfidence, nil, &lowConfidence,
+			map[string]any{"overall_confidence": overallConfidence, "threshold": threshold})
+		return
+	}
+
+	// Step 7: finalize_document (high-risk: only reached once validation,
+	// duplicate, and confidence gates all pass — see agent-architecture.md)
+	iterations++
+	if iterations > r.MaxIterations {
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "max_iterations_exceeded")
+		return
+	}
+	if err := r.Documents.MarkAutoProcessed(ctx, documentID, overallConfidence); err != nil {
+		log.Printf("agent run %s: mark auto processed: %v", agentRunID, err)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "persist_auto_processed_failed")
+		return
+	}
+	_ = r.ToolExecutions.Record(ctx, agentRunID, toolFinalizeDocument,
+		map[string]any{"document_id": documentID, "overall_confidence": overallConfidence},
+		map[string]any{"status": domain.StatusAutoProcessed}, domain.ToolExecutionSuccess)
+
+	if err := r.AgentRuns.Finish(ctx, agentRunID, domain.AgentRunCompleted, iterations); err != nil {
+		log.Printf("agent run %s: finish: %v", agentRunID, err)
+	}
+	_ = r.Audit.Record(ctx, doc.TenantID, auditActorAgent, "document.auto_processed",
+		domain.AuditEntityDocument, documentID,
+		map[string]any{"overall_confidence": overallConfidence, "agent_run_id": agentRunID})
+
+	log.Printf("agent run %s: document %s auto-processed (overall confidence %.2f, threshold %.2f)",
+		agentRunID, documentID, overallConfidence, threshold)
 }
 
 // routeToReview opens a review task, moves the document to
 // PENDING_REVIEW, and finishes the agent run as COMPLETED (routing to a
-// human is a normal outcome, not a processing failure). confidence is
-// optional — see DocumentRepo.MarkPendingReview.
-func (r *Runner) routeToReview(ctx context.Context, tenantID, documentID, agentRunID string, iterations int, reason domain.ReviewReason, confidence *float64, auditMetadata map[string]any) {
+// human is a normal outcome, not a processing failure). Both confidence
+// values are optional — see DocumentRepo.MarkPendingReview.
+func (r *Runner) routeToReview(ctx context.Context, tenantID, documentID, agentRunID string, iterations int, reason domain.ReviewReason, classificationConfidence, overallConfidence *float64, auditMetadata map[string]any) {
 	if err := r.Reviews.Create(ctx, documentID, reason); err != nil {
 		log.Printf("agent run %s: create review task: %v", agentRunID, err)
 	}
-	if err := r.Documents.MarkPendingReview(ctx, documentID, confidence); err != nil {
+	if err := r.Documents.MarkPendingReview(ctx, documentID, classificationConfidence, overallConfidence); err != nil {
 		log.Printf("agent run %s: mark pending review: %v", agentRunID, err)
 	}
 	if err := r.AgentRuns.Finish(ctx, agentRunID, domain.AgentRunCompleted, iterations); err != nil {

@@ -34,3 +34,17 @@ func (r *DocumentTypeRepo) GetFieldSchema(ctx context.Context, documentTypeID st
 	}
 	return schema, nil
 }
+
+// GetAutoProcessThreshold returns the confidence threshold above which
+// a document of this type may be auto-processed instead of routed to
+// human review (used by the calculate_confidence tool).
+func (r *DocumentTypeRepo) GetAutoProcessThreshold(ctx context.Context, documentTypeID string) (float64, error) {
+	var threshold float64
+	err := r.pool.QueryRow(ctx,
+		`SELECT auto_process_threshold FROM document_types WHERE id = $1`, documentTypeID,
+	).Scan(&threshold)
+	if err != nil {
+		return 0, fmt.Errorf("get auto process threshold: %w", err)
+	}
+	return threshold, nil
+}

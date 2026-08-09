@@ -54,7 +54,7 @@ jobs:
         run: go test -tags=integration ./... -v
 
   web:
-    name: Next.js build
+    name: Next.js lint, typecheck, test, build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -70,6 +70,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Lint
+        run: npm run lint
 
       - name: Type check
         run: npx tsc --noEmit

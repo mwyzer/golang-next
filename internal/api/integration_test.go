@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"golang-nextjs/internal/api"
+	"golang-nextjs/internal/auth"
 	"golang-nextjs/internal/db"
 	"golang-nextjs/internal/domain"
 	"golang-nextjs/internal/storage"
@@ -44,6 +45,14 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	pool = p
+
+	// The dev user (and the rest of the seed data) persists across
+	// tests — testutil.Reset only truncates the mutable activity
+	// tables — so bootstrapping the token once here, the same way
+	// cmd/api/main.go does from API_TOKEN, is enough for every test.
+	if err := db.NewUserRepo(pool).SetTokenHash(ctx, devUserID, auth.HashToken(apiToken)); err != nil {
+		panic(err)
+	}
 
 	code := m.Run()
 	testutil.StopShared(ctx)
@@ -74,7 +83,6 @@ func newTestServerWithMaxUpload(t *testing.T, maxUploadSize int64) *httptest.Ser
 		Audit:           db.NewAuditLogRepo(pool),
 		Store:           store,
 		MaxUploadSize:   maxUploadSize,
-		APIToken:        apiToken,
 	}
 
 	srv := httptest.NewServer(api.NewRouter(deps))
@@ -429,4 +437,73 @@ func TestRequireRole_ForbidsNonReviewers(t *testing.T) {
 
 	resp := authedRequest(t, http.MethodGet, srv.URL+"/api/v1/review-queue", nil)
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestUsers_Create(t *testing.T) {
+	reset(t)
+	srv := newTestServer(t)
+
+	body, _ := json.Marshal(map[string]any{"email": "reviewer2@example.com", "role": "reviewer"})
+	resp := authedRequest(t, http.MethodPost, srv.URL+"/api/v1/users", body)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var created struct {
+		UserID string `json:"user_id"`
+		Email  string `json:"email"`
+		Role   string `json:"role"`
+		Token  string `json:"token"`
+	}
+	decodeJSON(t, resp, &created)
+	assert.NotEmpty(t, created.UserID)
+	assert.Equal(t, "reviewer2@example.com", created.Email)
+	assert.Equal(t, "reviewer", created.Role)
+	assert.NotEmpty(t, created.Token)
+
+	// The freshly issued token must authenticate as the new user, with
+	// their own role — not the admin who created them.
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/review-queue", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+created.Token)
+	newUserResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer newUserResp.Body.Close()
+	assert.Equal(t, http.StatusOK, newUserResp.StatusCode,
+		"the new reviewer's own token should satisfy the reviewer-only endpoint")
+}
+
+func TestUsers_Create_RequiresAdmin(t *testing.T) {
+	reset(t)
+	srv := newTestServer(t)
+
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `UPDATE users SET role = 'reviewer' WHERE id = $1`, devUserID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `UPDATE users SET role = 'admin' WHERE id = $1`, devUserID)
+	})
+
+	body, _ := json.Marshal(map[string]any{"email": "nope@example.com", "role": "uploader"})
+	resp := authedRequest(t, http.MethodPost, srv.URL+"/api/v1/users", body)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestUsers_Create_DuplicateEmail(t *testing.T) {
+	reset(t)
+	srv := newTestServer(t)
+
+	body, _ := json.Marshal(map[string]any{"email": "dup@example.com", "role": "uploader"})
+	resp := authedRequest(t, http.MethodPost, srv.URL+"/api/v1/users", body)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	resp2 := authedRequest(t, http.MethodPost, srv.URL+"/api/v1/users", body)
+	assert.Equal(t, http.StatusConflict, resp2.StatusCode)
+}
+
+func TestUsers_Create_InvalidRole(t *testing.T) {
+	reset(t)
+	srv := newTestServer(t)
+
+	body, _ := json.Marshal(map[string]any{"email": "bad-role@example.com", "role": "superuser"})
+	resp := authedRequest(t, http.MethodPost, srv.URL+"/api/v1/users", body)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }

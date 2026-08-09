@@ -4,7 +4,9 @@ package db_test
 
 import (
 	"context"
+	"io/fs"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	migrations "golang-nextjs/db/migrations"
+	"golang-nextjs/internal/auth"
 	"golang-nextjs/internal/db"
 	"golang-nextjs/internal/domain"
 	"golang-nextjs/internal/testutil"
@@ -333,13 +337,45 @@ func TestReviewTaskRepo_CreateGetResolveListPending(t *testing.T) {
 	assert.ErrorIs(t, err, db.ErrReviewTaskNotFound)
 }
 
-func TestUserRepo_GetRole(t *testing.T) {
+func TestUserRepo_SetTokenHashAndGetByTokenHash(t *testing.T) {
 	reset(t)
+	ctx := context.Background()
 	repo := db.NewUserRepo(pool)
 
-	role, err := repo.GetRole(context.Background(), devUserID)
+	hash := auth.HashToken("some-test-token")
+	require.NoError(t, repo.SetTokenHash(ctx, devUserID, hash))
+
+	got, err := repo.GetByTokenHash(ctx, hash)
 	require.NoError(t, err)
-	assert.Equal(t, "admin", role)
+	assert.Equal(t, devUserID, got.ID)
+	assert.Equal(t, devTenantID, got.TenantID)
+	assert.Equal(t, "admin", got.Role)
+
+	_, err = repo.GetByTokenHash(ctx, auth.HashToken("no-such-token"))
+	assert.ErrorIs(t, err, db.ErrUserNotFound)
+}
+
+func TestUserRepo_Create(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	repo := db.NewUserRepo(pool)
+
+	user, token, err := repo.Create(ctx, devTenantID, "new-reviewer@example.com", "reviewer")
+	require.NoError(t, err)
+	require.NotEmpty(t, token)
+	assert.Equal(t, "reviewer", user.Role)
+	assert.Equal(t, devTenantID, user.TenantID)
+
+	// The returned plaintext token must actually authenticate as the
+	// new user.
+	got, err := repo.GetByTokenHash(ctx, auth.HashToken(token))
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, got.ID)
+
+	// A second user with the same email must be rejected, not silently
+	// overwrite the first.
+	_, _, err = repo.Create(ctx, devTenantID, "new-reviewer@example.com", "uploader")
+	assert.ErrorIs(t, err, db.ErrEmailTaken)
 }
 
 func TestDocumentTypeRepo_GetFieldSchemaAndThreshold(t *testing.T) {
@@ -592,7 +628,16 @@ func TestMigrate_ConcurrentCallersDoNotRace(t *testing.T) {
 		assert.NoErrorf(t, err, "concurrent Migrate caller %d", i)
 	}
 
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	require.NoError(t, err)
+	var wantCount int
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".up.sql") {
+			wantCount++
+		}
+	}
+
 	var count int
 	require.NoError(t, freshPool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count))
-	assert.Equal(t, 3, count, "each migration should be recorded exactly once despite concurrent callers")
+	assert.Equal(t, wantCount, count, "each migration should be recorded exactly once despite concurrent callers")
 }

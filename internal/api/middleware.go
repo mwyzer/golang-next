@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
 
+	"golang-nextjs/internal/auth"
 	"golang-nextjs/internal/db"
 )
 
@@ -14,47 +16,51 @@ type ctxKey string
 const (
 	ctxTenantID ctxKey = "tenant_id"
 	ctxUserID   ctxKey = "user_id"
-
-	// devTenantID/devUserID match the seeded row in
-	// db/migrations/000002_seed_dev_data.up.sql. Real per-user
-	// authentication is out of scope for this slice (see PRD Open
-	// Questions); this shared-token auth stands in for NFR-4/NFR-5
-	// until it's built.
-	devTenantID = "00000000-0000-0000-0000-000000000001"
-	devUserID   = "00000000-0000-0000-0000-000000000002"
+	ctxRole     ctxKey = "role"
 )
 
-// RequireAuth checks a shared bearer token and injects the (currently
-// fixed, dev-seeded) tenant and user IDs into the request context.
-func RequireAuth(apiToken string) func(http.Handler) http.Handler {
+// RequireAuth authenticates a request by its bearer token: the
+// token's SHA-256 hash is looked up against users.token_hash, and the
+// matching user's tenant ID, user ID, and role are injected into
+// context. Each caller is identified individually — unlike the earlier
+// single-shared-token design, where every caller was authenticated as
+// the same fixed dev user regardless of who actually held the token
+// (NFR-4, NFR-5).
+func RequireAuth(users *db.UserRepo) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if token == "" || token != apiToken {
+			if token == "" {
 				writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing or invalid bearer token")
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), ctxTenantID, devTenantID)
-			ctx = context.WithValue(ctx, ctxUserID, devUserID)
+			user, err := users.GetByTokenHash(r.Context(), auth.HashToken(token))
+			if errors.Is(err, db.ErrUserNotFound) {
+				writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing or invalid bearer token")
+				return
+			}
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "DB_ERROR", "failed to authenticate")
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), ctxTenantID, user.TenantID)
+			ctx = context.WithValue(ctx, ctxUserID, user.ID)
+			ctx = context.WithValue(ctx, ctxRole, user.Role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
 // RequireRole rejects the request unless the authenticated user's role
-// (from the users table) is one of allowedRoles. Must run after
-// RequireAuth so a user ID is already in context (SRS Feature: Human
-// Review — "only authorized reviewers can act on a review task").
-func RequireRole(users *db.UserRepo, allowedRoles ...string) func(http.Handler) http.Handler {
+// (set into context by RequireAuth, which must run first) is one of
+// allowedRoles (SRS Feature: Human Review — "only authorized reviewers
+// can act on a review task").
+func RequireRole(allowedRoles ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			role, err := users.GetRole(r.Context(), userIDFromContext(r.Context()))
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "DB_ERROR", "failed to load user role")
-				return
-			}
-			if !slices.Contains(allowedRoles, role) {
+			if !slices.Contains(allowedRoles, roleFromContext(r.Context())) {
 				writeError(w, http.StatusForbidden, "FORBIDDEN", "user is not authorized for this action")
 				return
 			}
@@ -70,5 +76,10 @@ func tenantIDFromContext(ctx context.Context) string {
 
 func userIDFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(ctxUserID).(string)
+	return v
+}
+
+func roleFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(ctxRole).(string)
 	return v
 }

@@ -7,8 +7,8 @@ Verifies the [Implementation](IMPLEMENTATION.md) against the
 
 | Level | Scope | Tooling | Status |
 | --- | --- | --- | --- |
-| Unit | Validation rules, LLM stub provider, upload MIME/size validation, API client + upload/review-queue/review-detail pages | Go `testing` + `testify`; Vitest + React Testing Library | `internal/validation`, `internal/providers/llm`, `internal/api` (`validate_test.go`); `web/lib/api.test.ts`, `web/app/**/*.test.tsx` |
-| Integration | Every `internal/db` repo, plus API endpoints (upload/get/review/queue/audit-log/auth) against a real Postgres | Go `testing` + `testcontainers-go` | `internal/db/integration_test.go`, `internal/api/integration_test.go` |
+| Unit | Validation rules, LLM stub provider, upload MIME/size validation, bearer-token generation/hashing, API client + upload/review-queue/review-detail pages | Go `testing` + `testify`; Vitest + React Testing Library | `internal/validation`, `internal/providers/llm`, `internal/auth`, `internal/api` (`validate_test.go`); `web/lib/api.test.ts`, `web/app/**/*.test.tsx` |
+| Integration | Every `internal/db` repo, plus API endpoints (upload/get/review/queue/audit-log/auth/user provisioning) against a real Postgres | Go `testing` + `testcontainers-go` | `internal/db/integration_test.go`, `internal/api/integration_test.go` |
 | Agent | Full agent-run scenarios: auto-process happy path, all four review-routing reasons (unknown type, validation failed, exact-duplicate, near-duplicate by key fields, low confidence), max-iterations exceeded (never retried), OCR/classification failures and timeouts, bounded retry (recoverable failure → requeue → succeeds; retry budget exhausted → permanently failed) | Go, with a fake `llm.Provider`/`ocr.Provider` (timeout tests use a delay-then-respond fake that races `Runner.ToolTimeout`; retry tests use a fake that fails N times then succeeds) | `internal/agent/runner_integration_test.go` |
 | End-to-End | Upload → process → review → completed, through the real HTTP API plus a real worker polling loop (production stub OCR/LLM providers, not test fakes) | Go `testing` + `testcontainers-go` | `e2e/e2e_test.go` |
 

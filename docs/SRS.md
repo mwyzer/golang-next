@@ -83,12 +83,12 @@ enterprise tenant administration.
   ```
 
 - **Acceptance Criteria:**
-  - [ ] Rejects unsupported file extensions/MIME types with `400`.
-  - [ ] Rejects files exceeding the configured size limit with `413`.
-  - [ ] Rejects unauthenticated requests with `401`.
-  - [ ] Rejects requests for tenants the user cannot access with `403`.
-  - [ ] Returns a unique `document_id` and status `UPLOADED` on success.
-  - [ ] Persists the original file and a document record before responding.
+  - [x] Rejects unsupported file extensions/MIME types with `400`.
+  - [x] Rejects files exceeding the configured size limit with `413`.
+  - [x] Rejects unauthenticated requests with `401`.
+  - [ ] Rejects requests for tenants the user cannot access with `403`. (Not testable yet — there's still only ever one tenant in practice; auth is now per-user, but multi-tenancy itself, including any way to create a second tenant, remains a [PRD Open Question](PRD.md#open-questions).)
+  - [x] Returns a unique `document_id` and status `UPLOADED` on success.
+  - [x] Persists the original file and a document record before responding.
 
 ### Feature: Document Classification
 
@@ -254,9 +254,9 @@ enterprise tenant administration.
   ```
 
 - **Acceptance Criteria:**
-  - [ ] Only authorized reviewers can act on a review task.
-  - [ ] Corrections are persisted as the authoritative field values.
-  - [ ] Review decisions are recorded in the audit log.
+  - [x] Only authorized reviewers can act on a review task. (`RequireRole`, now backed by real per-user roles rather than a single shared identity.)
+  - [x] Corrections are persisted as the authoritative field values.
+  - [x] Review decisions are recorded in the audit log.
 
 ### Feature: Agent Tool Execution
 

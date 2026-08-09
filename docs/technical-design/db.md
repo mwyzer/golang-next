@@ -27,6 +27,7 @@ Every table carries `tenant_id` to keep the schema multi-tenant-ready
 | tenant_id | uuid | FK → tenants.id, NOT NULL | |
 | email | text | UNIQUE, NOT NULL | |
 | role | text | NOT NULL | `uploader`, `reviewer`, `admin` |
+| token_hash | text | UNIQUE (partial, NULL allowed), NULL | SHA-256 hash of the user's bearer token — the token itself is never stored |
 | created_at | timestamptz | NOT NULL DEFAULT now() | |
 
 ### Table: `document_types`
@@ -179,6 +180,7 @@ erDiagram
         uuid tenant_id FK
         text email
         text role "uploader, reviewer, or admin"
+        text token_hash "SHA-256 of bearer token, nullable"
         timestamptz created_at
     }
     document_types {

@@ -6,7 +6,18 @@ and satisfying FR-16 of [Requirements](../REQUIREMENTS.md).
 ## Conventions
 
 - Base URL: `/api/v1`
-- Auth scheme: single shared bearer token in `Authorization: Bearer <API_TOKEN>` — **not** per-user JWT. It authenticates a request as a fixed dev tenant/user (seeded by `db/migrations/000002_seed_dev_data.up.sql`); real per-user authentication is a [PRD Open Question](../PRD.md#open-questions), not yet built
+- Auth scheme: per-user bearer token in `Authorization: Bearer <token>`
+  — **not** JWT. Each user has their own opaque, randomly generated
+  token (`internal/auth.GenerateToken`); only its SHA-256 hash is
+  persisted (`users.token_hash`), so a database leak doesn't directly
+  expose usable credentials. `RequireAuth` looks up the token's hash
+  and injects the matching user's tenant ID, user ID, and role into
+  context — each caller is authenticated as themselves, not as a fixed
+  shared identity. There's still only one tenant in practice (the
+  seeded dev tenant); multi-tenancy remains a [PRD Open Question](../PRD.md#open-questions).
+  New users are provisioned via `POST /users` (admin-only) or by
+  bootstrapping the seeded dev user's token from `API_TOKEN` on API
+  startup (`cmd/api/main.go`) — there's no self-service signup/login.
 - Versioning strategy: URL-prefixed (`/api/v1`); breaking changes bump the prefix
 - Error format:
 
@@ -25,12 +36,48 @@ and satisfying FR-16 of [Requirements](../REQUIREMENTS.md).
 | GET | `/documents/{id}/audit-log` | Get audit history for a document (spans `document.*`, `agent_run.*`, and `review.*` entries tied to it) | Yes |
 | GET | `/review-queue` | List documents pending human review | Yes (reviewer) |
 | POST | `/documents/{id}/review` | Submit a review decision (approve/reject/correct) | Yes (reviewer) |
+| POST | `/users` | Provision a new user and issue their bearer token | Yes (admin) |
 
 The following were designed but are **not implemented**: `GET /documents`
 (list/filter) and `GET /agent-runs/{id}` (only the list-by-document
 form exists). `GET /documents/{id}/status` was also dropped from the
 design — it would have been redundant with the status `GET /documents/{id}`
 already returns.
+
+### `POST /users`
+
+#### POST /users — Request
+
+```json
+{ "email": "reviewer@example.com", "role": "reviewer" }
+```
+
+`role` must be one of `uploader`, `reviewer`, `admin`.
+
+#### POST /users — Response 201
+
+```json
+{
+  "user_id": "USR-001",
+  "email": "reviewer@example.com",
+  "role": "reviewer",
+  "token": "3f9c2a1b..."
+}
+```
+
+`token` is shown **exactly once**, in this response — only its hash is
+persisted, so it can't be recovered later. If it's lost, the only fix
+is issuing the user a new one (there's no rotate-existing-user
+endpoint yet, only creation of new users).
+
+#### POST /users — Errors
+
+| Status | Condition |
+| --- | --- |
+| 400 | Missing email, or `role` isn't one of `uploader`/`reviewer`/`admin` |
+| 401 | Missing/invalid auth token |
+| 403 | Caller's role isn't `admin` |
+| 409 | A user with this email already exists |
 
 ### `GET /documents/{id}/audit-log`
 
@@ -99,8 +146,10 @@ mechanism.
 | 401 | Missing/invalid auth token |
 | 413 | File exceeds configured size limit |
 
-No `403` — there's no per-tenant authorization check today (single
-shared token, fixed dev tenant; see Conventions above).
+No `403` — there's no per-tenant authorization check today. Auth is
+per-user, but there's still only one tenant in practice (see
+Conventions above), so there's no second tenant to enforce a boundary
+against yet.
 
 ### `GET /documents/{id}`
 

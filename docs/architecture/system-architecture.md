@@ -49,7 +49,7 @@ bottleneck.
 
 ## Cross-Cutting Concerns
 
-- **Auth:** Token-based authentication (e.g. JWT) on all API routes except health checks; authorization enforced per document/tenant (NFR-4, NFR-5).
+- **Auth:** Per-user opaque bearer tokens (not JWT) on all API routes except `/healthz`; only each token's SHA-256 hash is persisted. Authorization is enforced per document (tenant-scoped queries) and per role (`RequireRole`); true multi-tenant isolation (a second tenant to actually enforce boundaries against) remains a PRD Open Question (NFR-4, NFR-5). See [API design](../technical-design/api.md).
 - **Logging/Observability:** Structured logging with a trace/execution ID per agent run, propagated through tool executions (NFR-18, NFR-19).
 - **Config/Secrets:** Environment variables / secret manager; no credentials in source (NFR-9).
 - **Error handling:** Tool and agent-run failures are caught, recorded, and either retried (bounded) or routed to human review — never silently dropped (NFR-11, NFR-13).

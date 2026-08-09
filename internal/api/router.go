@@ -20,12 +20,15 @@ type Deps struct {
 	Audit           *db.AuditLogRepo
 	Store           storage.Store
 	MaxUploadSize   int64
-	APIToken        string
 }
 
 // reviewerRoles gates POST /documents/{id}/review and GET /review-queue
 // (SRS Feature: Human Review — "only authorized reviewers").
 var reviewerRoles = []string{"reviewer", "admin"}
+
+// adminRoles gates user provisioning — only an admin can issue new
+// bearer tokens.
+var adminRoles = []string{"admin"}
 
 func NewRouter(deps Deps) http.Handler {
 	docs := &DocumentsHandler{
@@ -43,6 +46,7 @@ func NewRouter(deps Deps) http.Handler {
 		ExtractedFields: deps.ExtractedFields,
 		Audit:           deps.Audit,
 	}
+	users := &UsersHandler{Users: deps.Users}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -55,16 +59,21 @@ func NewRouter(deps Deps) http.Handler {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(RequireAuth(deps.APIToken))
+		r.Use(RequireAuth(deps.Users))
 		r.Post("/documents", docs.Upload)
 		r.Get("/documents/{id}", docs.Get)
 		r.Get("/documents/{id}/agent-runs", docs.ListAgentRuns)
 		r.Get("/documents/{id}/audit-log", docs.ListAuditLog)
 
 		r.Group(func(r chi.Router) {
-			r.Use(RequireRole(deps.Users, reviewerRoles...))
+			r.Use(RequireRole(reviewerRoles...))
 			r.Post("/documents/{id}/review", reviews.Submit)
 			r.Get("/review-queue", reviews.Queue)
+		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(RequireRole(adminRoles...))
+			r.Post("/users", users.Create)
 		})
 	})
 

@@ -23,7 +23,7 @@ func Load() Config {
 		DatabaseURL:        getEnv("DATABASE_URL", "postgres://docagent:docagent@localhost:5432/docagent?sslmode=disable"),
 		StorageRoot:        getEnv("STORAGE_ROOT", "/data/uploads"),
 		MaxUploadBytes:     getEnvInt64("MAX_UPLOAD_BYTES", 20*1024*1024), // 20MB default
-		APIToken:           getEnv("API_TOKEN", "dev-token"),
+		APIToken:           getEnv("API_TOKEN", "dev-token"),              // bootstraps the seeded dev user's bearer token; see cmd/api/main.go
 		PollIntervalSecs:   getEnvInt64("POLL_INTERVAL_SECONDS", 3),
 		MaxAgentIterations: getEnvInt64("MAX_AGENT_ITERATIONS", 10), // full pipeline is 7 steps; leaves headroom
 		ToolTimeoutSecs:    getEnvInt64("TOOL_TIMEOUT_SECONDS", 30), // bounds each OCR/LLM provider call (NFR-3)

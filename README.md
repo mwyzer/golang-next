@@ -234,13 +234,44 @@ export DATABASE_URL="postgres://docagent:docagent@localhost:5433/docagent?sslmod
 | `DATABASE_URL` | `postgres://docagent:docagent@localhost:5432/docagent?sslmode=disable` | Postgres connection string |
 | `STORAGE_ROOT` | `/data/uploads` | Local document storage root |
 | `MAX_UPLOAD_BYTES` | `20971520` (20 MB) | Max upload size |
-| `API_TOKEN` | `dev-token` | Shared bearer token (see docs/PRD.md Open Questions re: real auth) |
+| `API_TOKEN` | `dev-token` | Bootstraps the seeded dev user's per-user bearer token on API startup (see [Authentication](#authentication)) |
 | `POLL_INTERVAL_SECONDS` | `3` | Worker backoff between empty polls |
 | `MAX_AGENT_ITERATIONS` | `10` | Cap on pipeline steps per agent run |
 | `TOOL_TIMEOUT_SECONDS` | `30` | Timeout for each OCR/LLM provider call; `0` disables it |
 | `MAX_RETRIES` | `2` | Bounded retries for a recoverable agent-run failure (3 total attempts); `0` disables retry |
 
 The web app reads `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_API_TOKEN`.
+
+## Authentication
+
+Every user has their own opaque bearer token — not a JWT, not a
+session cookie, and not one token shared by everyone. Only each
+token's SHA-256 hash is persisted (`users.token_hash`), so a database
+leak doesn't directly expose usable credentials. `RequireAuth` looks
+up the token's hash and authenticates the request as that specific
+user (their own tenant ID, user ID, and role), not a fixed shared
+identity.
+
+There's no signup or login flow. Two ways to get a token:
+
+- **The seeded dev user**: on every API startup, `cmd/api/main.go`
+  sets (or rotates) the dev user's token to whatever `API_TOKEN` is
+  currently set to (default `dev-token`) — this is what the `curl`
+  examples below and the web UI's `NEXT_PUBLIC_API_TOKEN` use.
+- **New users**: an admin calls `POST /api/v1/users` with an email and
+  role (`uploader`, `reviewer`, or `admin`); the response includes the
+  new user's token, shown exactly once:
+
+  ```bash
+  curl -X POST http://localhost:8080/api/v1/users \
+    -H "Authorization: Bearer dev-token" \
+    -H "Content-Type: application/json" \
+    -d '{"email": "reviewer@example.com", "role": "reviewer"}'
+  # {"user_id": "...", "email": "reviewer@example.com", "role": "reviewer", "token": "..."}
+  ```
+
+There's still only one tenant in practice (the seeded dev tenant) —
+multi-tenancy is a separate, unbuilt feature (see [docs/PRD.md](docs/PRD.md) Open Questions).
 
 ## Operating with Docker Compose
 

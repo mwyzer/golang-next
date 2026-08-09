@@ -26,6 +26,7 @@ import (
 
 	"golang-nextjs/internal/agent"
 	"golang-nextjs/internal/api"
+	"golang-nextjs/internal/auth"
 	"golang-nextjs/internal/db"
 	"golang-nextjs/internal/providers/llm"
 	"golang-nextjs/internal/providers/ocr"
@@ -34,6 +35,10 @@ import (
 )
 
 const apiToken = "e2e-token"
+
+// devUserID matches the seeded row in
+// db/migrations/000002_seed_dev_data.up.sql.
+const devUserID = "00000000-0000-0000-0000-000000000002"
 
 var pool *pgxpool.Pool
 
@@ -44,6 +49,13 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	pool = p
+
+	// Auth is per-user (internal/api/middleware.go), so bootstrap the
+	// seeded dev user's token the same way cmd/api/main.go does from
+	// API_TOKEN.
+	if err := db.NewUserRepo(pool).SetTokenHash(ctx, devUserID, auth.HashToken(apiToken)); err != nil {
+		panic(err)
+	}
 
 	code := m.Run()
 	testutil.StopShared(ctx)
@@ -76,7 +88,6 @@ func startStack(t *testing.T) *httptest.Server {
 		Audit:           db.NewAuditLogRepo(pool),
 		Store:           store,
 		MaxUploadSize:   20 << 20,
-		APIToken:        apiToken,
 	}
 	srv := httptest.NewServer(api.NewRouter(deps))
 	t.Cleanup(srv.Close)

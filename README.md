@@ -241,8 +241,9 @@ export DATABASE_URL="postgres://docagent:docagent@localhost:5433/docagent?sslmod
 | `MAX_RETRIES` | `2` | Bounded retries for a recoverable agent-run failure (3 total attempts); `0` disables retry |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated origins allowed to call the API from a browser (the web UI's origin) |
 | `LLM_PROVIDER` | `stub` | Worker only. `stub` (keyword/heuristic) or `anthropic` (real Claude calls via `github.com/anthropics/anthropic-sdk-go`, see `internal/providers/llm/anthropic.go`) |
-| `ANTHROPIC_API_KEY` | *(unset)* | Worker only. Required when `LLM_PROVIDER=anthropic` — the worker fails to start without it |
-| `ANTHROPIC_MODEL` | `claude-opus-5` | Worker only. Model ID used for `classify_document`/`extract_fields` when `LLM_PROVIDER=anthropic` |
+| `OCR_PROVIDER` | `stub` | Worker only. `stub` (reads raw file bytes as text) or `anthropic` (real OCR via Claude vision, see `internal/providers/ocr/anthropic.go`) |
+| `ANTHROPIC_API_KEY` | *(unset)* | Worker only. Required when `LLM_PROVIDER=anthropic` and/or `OCR_PROVIDER=anthropic` (shared key) — the worker fails to start without it |
+| `ANTHROPIC_MODEL` | `claude-opus-5` | Worker only. Model ID used for both providers above when set to `anthropic` |
 
 The web app reads `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_API_TOKEN`.
 

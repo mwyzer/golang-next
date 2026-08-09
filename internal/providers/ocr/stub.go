@@ -16,7 +16,7 @@ type StubProvider struct {
 	Store storage.Store
 }
 
-func (p StubProvider) ExtractText(ctx context.Context, path string) (string, error) {
+func (p StubProvider) ExtractText(ctx context.Context, path, _ string) (string, error) {
 	f, err := p.Store.Open(ctx, path)
 	if err != nil {
 		return "", fmt.Errorf("open document: %w", err)

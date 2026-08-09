@@ -80,7 +80,7 @@ type fakeOCR struct {
 	delay time.Duration
 }
 
-func (f fakeOCR) ExtractText(ctx context.Context, _ string) (string, error) {
+func (f fakeOCR) ExtractText(ctx context.Context, _, _ string) (string, error) {
 	if err := waitOrCancel(ctx, f.delay); err != nil {
 		return "", err
 	}
@@ -95,7 +95,7 @@ type flakyOCR struct {
 	text              string
 }
 
-func (f flakyOCR) ExtractText(context.Context, string) (string, error) {
+func (f flakyOCR) ExtractText(context.Context, string, string) (string, error) {
 	if *f.remainingFailures > 0 {
 		*f.remainingFailures--
 		return "", assert.AnError

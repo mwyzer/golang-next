@@ -8,6 +8,11 @@ package ocr
 import "context"
 
 type Provider interface {
-	// ExtractText returns the text content of the document stored at path.
-	ExtractText(ctx context.Context, path string) (string, error)
+	// ExtractText returns the text content of the document stored at
+	// path. mimeType is the document's stored MIME type (one of the
+	// types ValidateUpload allows — see internal/api/validate.go), so a
+	// provider that needs to know how to decode the bytes (e.g. a
+	// vision-based one choosing between a PDF vs. image content block)
+	// doesn't have to re-derive it from the file.
+	ExtractText(ctx context.Context, path, mimeType string) (string, error)
 }

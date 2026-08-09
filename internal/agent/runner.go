@@ -95,7 +95,7 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		return
 	}
 	toolCtx, cancel := r.withToolTimeout(ctx)
-	text, err := r.OCR.ExtractText(toolCtx, doc.FilePath)
+	text, err := r.OCR.ExtractText(toolCtx, doc.FilePath, doc.MimeType)
 	cancel()
 	ocrInput := map[string]any{"document_id": documentID, "file_path": doc.FilePath}
 	if err != nil {

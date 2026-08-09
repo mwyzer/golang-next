@@ -45,6 +45,12 @@ func main() {
 	}
 	log.Printf("LLM provider: %s", cfg.LLMProvider)
 
+	ocrProvider, err := ocr.NewProvider(cfg.OCRProvider, cfg.AnthropicAPIKey, cfg.AnthropicModel, store)
+	if err != nil {
+		log.Fatalf("init OCR provider: %v", err)
+	}
+	log.Printf("OCR provider: %s", cfg.OCRProvider)
+
 	runner := &agent.Runner{
 		Pool:            pool,
 		Documents:       db.NewDocumentRepo(pool),
@@ -54,7 +60,7 @@ func main() {
 		ToolExecutions:  db.NewToolExecutionRepo(pool),
 		Reviews:         db.NewReviewTaskRepo(pool),
 		Audit:           db.NewAuditLogRepo(pool),
-		OCR:             ocr.StubProvider{Store: store},
+		OCR:             ocrProvider,
 		LLM:             llmProvider,
 		MaxIterations:   int(cfg.MaxAgentIterations),
 		ToolTimeout:     time.Duration(cfg.ToolTimeoutSecs) * time.Second,

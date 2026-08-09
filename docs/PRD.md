@@ -96,12 +96,14 @@ but isn't threaded into log lines yet; see [Tools](technical-design/tools.md)).
   It's opt-in via `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` (worker
   falls back to `llm.StubProvider` — the default — when unset); see
   [Tools](technical-design/tools.md) and the config table in
-  [README.md](../README.md). OCR remains unresolved below and is not yet
-  folded into this provider, even though Claude's vision input could
-  plausibly replace `ocr.StubProvider` in the future.
-- Which OCR provider should be used? **Still open.** `ocr.StubProvider`
-  (reads the raw file bytes as text — not real OCR) is the only
-  implementation; no external/local OCR engine is wired in.
+  [README.md](../README.md).
+- ~~Which OCR provider should be used?~~ **Resolved:** also Anthropic
+  Claude, via its vision input, rather than a separate OCR vendor —
+  `ocr.AnthropicProvider` (`internal/providers/ocr/anthropic.go`) sends
+  the stored file's bytes as a PDF or image content block and asks
+  Claude to transcribe it, reusing the same `ANTHROPIC_API_KEY`/
+  `ANTHROPIC_MODEL` as the LLM provider. Opt-in via `OCR_PROVIDER=anthropic`
+  (worker falls back to `ocr.StubProvider` — the default — when unset).
 - Should document storage use local storage or S3-compatible storage?
   **Still open as a decision**, though only local disk storage exists
   today (`internal/storage/local.go`, `STORAGE_ROOT`) — no S3-compatible

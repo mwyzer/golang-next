@@ -18,6 +18,7 @@ type Config struct {
 	MaxRetries         int64
 	CORSAllowedOrigins []string
 	LLMProvider        string
+	OCRProvider        string
 	AnthropicAPIKey    string
 	AnthropicModel     string
 }
@@ -35,6 +36,7 @@ func Load() Config {
 		MaxRetries:         getEnvInt64("MAX_RETRIES", 2),           // bounded retry for recoverable failures (FR-27, NFR-11)
 		CORSAllowedOrigins: getEnvList("CORS_ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
 		LLMProvider:        getEnv("LLM_PROVIDER", "stub"), // "stub" or "anthropic"; see internal/providers/llm
+		OCRProvider:        getEnv("OCR_PROVIDER", "stub"), // "stub" or "anthropic"; see internal/providers/ocr
 		AnthropicAPIKey:    getEnv("ANTHROPIC_API_KEY", ""),
 		AnthropicModel:     getEnv("ANTHROPIC_MODEL", "claude-opus-5"),
 	}

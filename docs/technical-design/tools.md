@@ -16,7 +16,7 @@ engineering tooling, not agent-callable tools.
 | Standard library `log` | Logging | Not `zerolog`/`slog` — plain `log.Printf`, correlated by agent run ID (`agent_runs.trace_id` exists in the schema but isn't yet threaded into log lines; partially satisfies NFR-18/NFR-19) |
 | `testify` | Unit/integration test assertions | `assert`/`require` only, no mocking — integration tests run against a real Postgres via `testcontainers-go` |
 | `github.com/anthropics/anthropic-sdk-go` | Classification, extraction, reasoning calls | Abstracted behind `llm.Provider`. `llm.StubProvider` (keyword/heuristic) is the default; `llm.AnthropicProvider` (`internal/providers/llm/anthropic.go`) is a real Claude-backed implementation, opt-in via `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` (`llm.NewProvider` picks between them — see `cmd/worker/main.go`). Resolves the LLM-provider PRD Open Question; satisfies NFR-17 (swappable behind the interface) |
-| OCR client (provider-specific or local) | Text extraction from images/PDFs | Abstracted behind `ocr.Provider`; only `ocr.StubProvider` (reads raw file bytes as text) ships today — no real OCR wired in (NFR-17, PRD Open Questions) |
+| `github.com/anthropics/anthropic-sdk-go` (shared with the LLM row above) | Text extraction from images/PDFs | Abstracted behind `ocr.Provider`. `ocr.StubProvider` (reads raw file bytes as text) is the default; `ocr.AnthropicProvider` (`internal/providers/ocr/anthropic.go`) sends the file to Claude as a PDF/image content block and returns its transcription — no separate OCR vendor, opt-in via `OCR_PROVIDER=anthropic` (`ocr.NewProvider` picks between them). Resolves the OCR-provider PRD Open Question; satisfies NFR-17 |
 
 ## Frontend (Next.js)
 
@@ -31,7 +31,7 @@ engineering tooling, not agent-callable tools.
 | Service | Purpose | Auth Method |
 | --- | --- | --- |
 | Anthropic Claude (opt-in — see `LLM_PROVIDER`) | Classification, structured extraction, reasoning | `ANTHROPIC_API_KEY` |
-| OCR Provider (TBD — see PRD Open Questions) | Text extraction from scanned/image documents | API key or local |
+| Anthropic Claude (opt-in — see `OCR_PROVIDER`) | Text extraction from scanned/image documents, via vision input | `ANTHROPIC_API_KEY` (shared with the row above) |
 | Object Storage (local disk / S3-compatible) | Original file storage | IAM credentials / local filesystem |
 
 ## Dev Tooling

@@ -7,13 +7,15 @@ Verifies the [Implementation](IMPLEMENTATION.md) against the
 
 | Level | Scope | Tooling | Status |
 | --- | --- | --- | --- |
-| Unit | Validation rules, LLM stub provider, upload MIME/size validation | Go `testing` + `testify` | `internal/validation`, `internal/providers/llm`, `internal/api` (`validate_test.go`) |
+| Unit | Validation rules, LLM stub provider, upload MIME/size validation, API client + upload/review-queue/review-detail pages | Go `testing` + `testify`; Vitest + React Testing Library | `internal/validation`, `internal/providers/llm`, `internal/api` (`validate_test.go`); `web/lib/api.test.ts`, `web/app/**/*.test.tsx` |
 | Integration | Every `internal/db` repo, plus API endpoints (upload/get/review/queue/auth) against a real Postgres | Go `testing` + `testcontainers-go` | `internal/db/integration_test.go`, `internal/api/integration_test.go` |
 | Agent | Full agent-run scenarios: auto-process happy path, all four review-routing reasons (unknown type, validation failed, duplicate, low confidence), max-iterations exceeded, OCR failure | Go, with a fake `llm.Provider`/`ocr.Provider` | `internal/agent/runner_integration_test.go` |
 | End-to-End | Upload → process → review → completed, through the UI | Not yet implemented | — |
 
-Frontend (`web/`) has no test suite yet — CI only runs a type check and
-production build (`npx tsc --noEmit`, `npm run build`).
+Frontend tests (`web/`) mock `@/lib/api` (or `fetch`, for `api.test.ts`
+itself) — no server or Postgres involved. Run with `npm test` from
+`web/`. The React Testing Library setup (`web/vitest.setup.ts`) registers
+`afterEach(cleanup)` explicitly since Vitest isn't run in `globals` mode.
 
 Integration and agent tests are gated behind the `integration` build tag
 (`//go:build integration`) so `go test ./...` stays fast and
@@ -47,7 +49,7 @@ in place.
 
 - **go**: `go build`, `gofmt -l` (fails on unformatted files), `go vet`, `go test ./...` (unit tests).
 - **go-integration**: `go test -tags=integration ./...` — the full `internal/db`, `internal/agent`, and `internal/api` suites against real testcontainers.
-- **web**: `npm ci`, `npx tsc --noEmit`, `npm run build`.
+- **web**: `npm ci`, `npx tsc --noEmit`, `npm test`, `npm run build`.
 
 Agent-run tests must pass with zero unbounded loops (iteration cap
 enforced, see `TestRunner_MaxIterationsExceeded`) and zero unregistered

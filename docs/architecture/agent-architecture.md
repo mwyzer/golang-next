@@ -23,26 +23,34 @@ arbitrary code or unregistered actions (NFR-7).
 
 ```mermaid
 flowchart TD
-    Start([Job dequeued]) --> Classify[classify_document]
-    Classify --> Extract[extract_fields]
+    Start([Document claimed: UPLOADED]) --> OCR[run_ocr]
+    OCR --> Classify[classify_document]
+    Classify -->|type = unknown| Review([PENDING_REVIEW])
+    Classify -->|classified| Extract[extract_fields]
     Extract --> Validate[validate_extraction]
-    Validate --> Dedup[check_duplicate]
-    Dedup --> Confidence[calculate_confidence]
-    Confidence -->|>= threshold and valid| AutoProcess[finalize_document]
-    Confidence -->|< threshold or invalid or duplicate| Review[route_to_review]
-    AutoProcess --> Done([AUTO_PROCESSED])
-    Review --> Pending([PENDING_REVIEW])
-    Classify -->|error / max iterations| Failed([FAILED])
-    Extract -->|error / max iterations| Failed
-    Validate -->|error / max iterations| Failed
+    Validate -->|violations found| Review
+    Validate -->|valid| Dedup[check_duplicate]
+    Dedup -->|exact or near-duplicate match| Review
+    Dedup -->|unique| Confidence[calculate_confidence]
+    Confidence -->|below auto-process threshold| Review
+    Confidence -->|>= threshold| Finalize[finalize_document]
+    Finalize --> Done([AUTO_PROCESSED])
+
+    OCR -.error, or iteration cap exceeded.-> Failed([FAILED])
+    Classify -.error, or iteration cap exceeded.-> Failed
+    Extract -.error, or iteration cap exceeded.-> Failed
+    Validate -.iteration cap exceeded.-> Failed
+    Dedup -.error, or iteration cap exceeded.-> Failed
+    Confidence -.error, or iteration cap exceeded.-> Failed
+    Finalize -.error, or iteration cap exceeded.-> Failed
 ```
 
 At each step the agent records a **Tool Execution** (input, output,
 status, duration) and re-evaluates document state before selecting the
-next tool. The loop terminates immediately at a terminal state and
-otherwise after `max_agent_iterations` (configurable, default TBD) is
-reached, at which point the run is marked `FAILED` and routed to human
-review (FR-20, FR-21, NFR-13).
+next tool. Routing to `PENDING_REVIEW` is a normal, successful outcome
+(the agent run finishes `COMPLETED`, not `FAILED`) — only an
+unrecoverable error or exceeding `max_agent_iterations` fails the run
+(FR-20, FR-21, NFR-13).
 
 ## Tools / Capabilities Available to Agents
 

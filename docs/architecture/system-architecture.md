@@ -12,13 +12,11 @@ flowchart LR
     User((User)) --> Frontend[Next.js Frontend]
     Reviewer((Reviewer)) --> Frontend
     Frontend --> API[Go API Server]
-    API --> Queue[(Job Queue)]
-    Queue --> Worker[Go Agent Worker]
+    API --> DB[(PostgreSQL)]
+    Worker[Go Agent Worker] -->|polls for UPLOADED documents| DB
     Worker --> LLM[[LLM Provider]]
     Worker --> OCR[[OCR Provider]]
-    Worker --> VectorDB[(pgvector RAG Store)]
-    API --> DB[(PostgreSQL)]
-    Worker --> DB
+    Worker -.future.-> VectorDB[(pgvector RAG Store)]
     API --> Storage[(Object Storage)]
     Worker --> Storage
 ```
@@ -28,18 +26,23 @@ flowchart LR
 | Component | Responsibility | Tech |
 | --- | --- | --- |
 | Frontend | Upload UI, processing status, review queue, audit views | Next.js (TypeScript) |
-| API Server | AuthN/AuthZ, upload endpoint, document/review/audit REST API, enqueues processing jobs | Go (chi/gin), pgx |
-| Agent Worker | Runs the AI Agent loop: classify → extract → validate → score → route | Go, background worker pool |
-| Job Queue | Decouples upload from asynchronous agent processing (FR-26, NFR-15) | Postgres-backed queue (e.g. river/asynq) or Redis |
-| PostgreSQL | System of record: documents, extractions, agent runs, reviews, audit log | PostgreSQL |
+| API Server | AuthN/AuthZ, upload endpoint, document/review/audit REST API | Go (chi), pgx |
+| Agent Worker | Polls for `UPLOADED` documents and runs the AI Agent loop: OCR → classify → extract → validate → dedup → score → route | Go, poll-and-backoff loop (no separate queue service — see below) |
+| PostgreSQL | System of record: documents, extractions, agent runs, reviews, audit log. Also doubles as the job queue: the worker claims the oldest `UPLOADED` document with `SELECT ... FOR UPDATE SKIP LOCKED`, so concurrent worker instances never double-process one | PostgreSQL |
 | Object Storage | Stores original uploaded files | Local disk (dev) / S3-compatible (prod) |
-| LLM Provider | Classification, extraction, reasoning | External API (provider TBD, see PRD open questions) |
-| OCR Provider | Text extraction from images/PDFs | External API or local engine (TBD) |
-| Vector Store | RAG retrieval of policies/knowledge (FR-24) | pgvector extension on PostgreSQL |
+| LLM Provider | Classification, extraction, reasoning | Pluggable `Provider` interface; stub implementation ships by default (see PRD open questions) |
+| OCR Provider | Text extraction from images/PDFs | Pluggable `Provider` interface; stub implementation ships by default (see PRD open questions) |
+| Vector Store | RAG retrieval of policies/knowledge (FR-24) | pgvector extension on PostgreSQL — schema exists (`knowledge_chunks`), retrieval tool not yet implemented |
+
+A dedicated job queue (Postgres-backed or Redis) was considered but
+isn't needed at this scale: `SKIP LOCKED` claiming against the
+`documents` table already gives safe concurrent dequeuing without an
+extra moving part. Revisit if worker throughput ever becomes the
+bottleneck.
 
 ## Deployment Topology
 
-- Every component (API Server, Agent Worker, Frontend, PostgreSQL, Job Queue) runs as a Docker container; the API Server and Agent Worker are independently deployable images, allowing the worker pool to scale separately from API traffic (supports NFR-15, NFR-21).
+- Every component (API Server, Agent Worker, Frontend, PostgreSQL) runs as a Docker container; the API Server and Agent Worker are independently deployable images, allowing the worker pool to scale separately from API traffic (supports NFR-15, NFR-21).
 - Local development runs the full stack via Docker Compose, so a new contributor can reproduce the system with a single command (NFR-22) — see [Tools](../technical-design/tools.md).
 - Single-tenant PostgreSQL instance for the MVP; schema carries a `tenant_id` on all tables to avoid a rewrite when multi-tenancy is introduced (per SRS Scope).
 - Object storage is abstracted behind an interface so local disk (dev) and S3-compatible storage (prod) are interchangeable (NFR-17, PRD open question).

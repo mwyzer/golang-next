@@ -27,6 +27,44 @@ See [docs/PRD.md](docs/PRD.md) for the full product summary and goals.
 Full design docs: [docs/architecture/agent-architecture.md](docs/architecture/agent-architecture.md),
 [docs/architecture/system-architecture.md](docs/architecture/system-architecture.md).
 
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant W as Web UI
+    participant A as API
+    participant DB as PostgreSQL
+    participant Wk as Worker
+    actor R as Reviewer
+
+    U->>W: Select file
+    W->>A: POST /documents
+    A->>DB: INSERT document (status = UPLOADED)
+    A-->>W: 201 {document_id, status: UPLOADED}
+
+    loop poll with backoff
+        Wk->>DB: claim oldest UPLOADED document (SKIP LOCKED)
+    end
+    Wk->>Wk: run_ocr -> classify -> extract -> validate -> check_duplicate -> calculate_confidence
+    alt cleared every gate
+        Wk->>DB: status = AUTO_PROCESSED
+    else routed to review
+        Wk->>DB: status = PENDING_REVIEW, create review_task
+    end
+
+    W->>A: GET /documents/{id}
+    A-->>W: current status
+
+    opt needs review
+        R->>W: Open review queue
+        W->>A: GET /review-queue
+        A-->>W: pending review tasks
+        R->>W: Approve / Reject / Correct
+        W->>A: POST /documents/{id}/review
+        A->>DB: resolve review_task, status = REVIEWED
+        A-->>W: 200
+    end
+```
+
 ## Stack
 
 - **API / worker**: Go, [chi](https://github.com/go-chi/chi) router, [pgx](https://github.com/jackc/pgx)
@@ -51,6 +89,52 @@ web/             Next.js frontend
 e2e/             End-to-end tests (real API + worker loop)
 docs/            SDLC docs: PRD, requirements, SRS, architecture, technical design
 ```
+
+## Data model
+
+```mermaid
+erDiagram
+    tenants ||--o{ users : has
+    tenants ||--o{ documents : owns
+    tenants ||--o{ audit_logs : scopes
+    tenants ||--o{ knowledge_chunks : owns
+    users ||--o{ documents : uploads
+    users ||--o{ review_tasks : reviews
+    document_types ||--o{ documents : classifies
+    documents ||--o{ extracted_fields : has
+    documents ||--o{ agent_runs : processed_by
+    documents ||--o{ review_tasks : may_have
+    agent_runs ||--o{ tool_executions : contains
+
+    documents {
+        uuid id PK
+        uuid tenant_id FK
+        uuid uploaded_by FK
+        text document_type_id FK "null until classified"
+        text status
+        text content_hash "exact-duplicate lookup"
+        text key_fields_hash "near-duplicate lookup, nullable"
+        numeric classification_confidence
+        numeric overall_confidence
+        boolean is_duplicate
+        uuid duplicate_of_document_id FK "self-reference, nullable"
+    }
+    review_tasks {
+        uuid id PK
+        uuid document_id FK
+        text reason "LOW_CONFIDENCE, VALIDATION_FAILED, DUPLICATE, or UNKNOWN_TYPE"
+        text status "PENDING, APPROVED, REJECTED, or CORRECTED"
+    }
+    agent_runs {
+        uuid id PK
+        uuid document_id FK
+        text status "RUNNING, COMPLETED, or FAILED"
+        int iteration_count
+        int max_iterations
+    }
+```
+
+Full column-level schema (every table, every field): [docs/technical-design/db.md](docs/technical-design/db.md).
 
 ## Getting started
 

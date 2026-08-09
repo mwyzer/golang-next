@@ -159,16 +159,115 @@ Every table carries `tenant_id` to keep the schema multi-tenant-ready
 erDiagram
     tenants ||--o{ users : has
     tenants ||--o{ documents : owns
+    tenants ||--o{ audit_logs : scopes
+    tenants ||--o{ knowledge_chunks : owns
     users ||--o{ documents : uploads
+    users ||--o{ review_tasks : reviews
     document_types ||--o{ documents : classifies
     documents ||--o{ extracted_fields : has
     documents ||--o{ agent_runs : processed_by
-    agent_runs ||--o{ tool_executions : contains
     documents ||--o{ review_tasks : may_have
-    users ||--o{ review_tasks : reviews
-    tenants ||--o{ audit_logs : scopes
-    tenants ||--o{ knowledge_chunks : owns
+    agent_runs ||--o{ tool_executions : contains
+
+    tenants {
+        uuid id PK
+        text name
+        timestamptz created_at
+    }
+    users {
+        uuid id PK
+        uuid tenant_id FK
+        text email
+        text role "uploader, reviewer, or admin"
+        timestamptz created_at
+    }
+    document_types {
+        text id PK "invoice, receipt, or cv"
+        jsonb field_schema
+        jsonb validation_rules
+        numeric auto_process_threshold
+    }
+    documents {
+        uuid id PK
+        uuid tenant_id FK
+        uuid uploaded_by FK
+        text document_type_id FK "null until classified"
+        text status
+        text file_path
+        text mime_type
+        bigint file_size_bytes
+        text content_hash "exact-duplicate lookup"
+        text key_fields_hash "near-duplicate lookup, nullable"
+        numeric classification_confidence
+        numeric overall_confidence
+        boolean is_duplicate
+        uuid duplicate_of_document_id FK "self-reference, nullable"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    extracted_fields {
+        uuid id PK
+        uuid document_id FK
+        text field_name
+        jsonb field_value
+        numeric confidence
+        text source "extraction or review_correction"
+        timestamptz created_at
+    }
+    agent_runs {
+        uuid id PK
+        uuid document_id FK
+        text status "RUNNING, COMPLETED, or FAILED"
+        int iteration_count
+        int max_iterations
+        timestamptz started_at
+        timestamptz finished_at
+        text trace_id
+    }
+    tool_executions {
+        uuid id PK
+        uuid agent_run_id FK
+        text tool_name
+        jsonb input
+        jsonb output
+        text status "SUCCESS, FAILED, or TIMEOUT"
+        timestamptz started_at
+        timestamptz finished_at
+    }
+    review_tasks {
+        uuid id PK
+        uuid document_id FK
+        text reason "LOW_CONFIDENCE, VALIDATION_FAILED, DUPLICATE, or UNKNOWN_TYPE"
+        text status "PENDING, APPROVED, REJECTED, or CORRECTED"
+        uuid assigned_to FK
+        uuid reviewed_by FK
+        text notes
+        timestamptz created_at
+        timestamptz reviewed_at
+    }
+    audit_logs {
+        uuid id PK
+        uuid tenant_id FK
+        text actor "user ID or agent"
+        text action
+        text entity_type "document, agent_run, or review_task"
+        uuid entity_id
+        jsonb metadata
+        timestamptz created_at
+    }
+    knowledge_chunks {
+        uuid id PK
+        uuid tenant_id FK
+        text content
+        vector embedding "1536-dim, pgvector, for retrieve_policy"
+        timestamptz created_at
+    }
 ```
+
+`documents.duplicate_of_document_id` is a nullable self-reference (set
+by `check_duplicate` when a document matches an earlier one, exactly or
+by key fields) — omitted from the diagram above as an edge to keep it
+readable, but present as a column.
 
 ---
 

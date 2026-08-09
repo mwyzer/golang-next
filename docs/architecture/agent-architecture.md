@@ -77,7 +77,7 @@ the tool is marked idempotent/retryable (NFR-11).
 - **Tool allowlist:** the agent may only call registered tools — no arbitrary code execution (NFR-7, PRD Out of Scope).
 - **Iteration cap:** every agent run has a maximum iteration count; exceeding it fails the run rather than looping indefinitely (FR-21, NFR-13).
 - **Human approval for high-risk actions:** `finalize_document` (committing data as approved) and any future destructive action require the preceding validation/confidence gates to pass, or the run is routed to human review instead (NFR-8).
-- **Timeouts:** each tool call has a bounded execution time; a timeout is recorded as a failed tool execution and counts toward the iteration cap (NFR-3).
+- **Timeouts:** the three tools that call an external provider (`run_ocr`, `classify_document`, `extract_fields`) are bounded by `Runner.ToolTimeout` (configurable via `TOOL_TIMEOUT_SECONDS`, default 30s, `0` disables it). A timeout is recorded as a `TIMEOUT` tool execution — distinct from `FAILED` — and fails the agent run the same way any other tool error does (NFR-3). The remaining four tools are deterministic/DB-only and aren't independently timeout-bounded.
 - **Idempotency:** re-processing the same document (e.g. after a retry) must not create duplicate side effects — tool executions are keyed by agent run + step (NFR-12).
 - **Full traceability:** every tool execution and state transition is recorded against the agent run's trace/execution ID for audit and debugging (NFR-10, NFR-18, NFR-19).
 

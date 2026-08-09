@@ -13,6 +13,7 @@ type Config struct {
 	APIToken           string
 	PollIntervalSecs   int64
 	MaxAgentIterations int64
+	ToolTimeoutSecs    int64
 }
 
 func Load() Config {
@@ -24,6 +25,7 @@ func Load() Config {
 		APIToken:           getEnv("API_TOKEN", "dev-token"),
 		PollIntervalSecs:   getEnvInt64("POLL_INTERVAL_SECONDS", 3),
 		MaxAgentIterations: getEnvInt64("MAX_AGENT_ITERATIONS", 10), // full pipeline is 7 steps; leaves headroom
+		ToolTimeoutSecs:    getEnvInt64("TOOL_TIMEOUT_SECONDS", 30), // bounds each OCR/LLM provider call (NFR-3)
 	}
 }
 

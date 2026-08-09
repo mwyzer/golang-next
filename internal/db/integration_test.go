@@ -389,6 +389,46 @@ func TestAuditLogRepo_Record(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestAuditLogRepo_ListByDocument(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	docs := db.NewDocumentRepo(pool)
+	reviews := db.NewReviewTaskRepo(pool)
+	audit := db.NewAuditLogRepo(pool)
+
+	doc := newDocument(t, docs, nil)
+	_, agentRunID, ok, err := db.ClaimNextUploaded(ctx, pool, 10)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.NoError(t, reviews.Create(ctx, doc.ID, domain.ReviewReasonLowConfidence))
+	task, err := reviews.GetPendingByDocument(ctx, doc.ID)
+	require.NoError(t, err)
+
+	// A document's audit trail spans three entity types: entries keyed
+	// directly by the document ID, by its agent run's ID, and by its
+	// review task's ID. ListByDocument must gather all three, in order.
+	require.NoError(t, audit.Record(ctx, devTenantID, "agent", "document.classified",
+		domain.AuditEntityDocument, doc.ID, map[string]any{"document_type": "invoice"}))
+	require.NoError(t, audit.Record(ctx, devTenantID, "agent", "agent_run.failed",
+		domain.AuditEntityAgentRun, agentRunID, map[string]any{"reason": "max_iterations_exceeded"}))
+	require.NoError(t, audit.Record(ctx, devTenantID, devUserID, "review.approved",
+		domain.AuditEntityReviewTask, task.ID, map[string]any{"decision": "approve"}))
+
+	// A second, unrelated document's audit trail must not leak in.
+	other := newDocument(t, docs, nil)
+	require.NoError(t, audit.Record(ctx, devTenantID, "agent", "document.classified",
+		domain.AuditEntityDocument, other.ID, map[string]any{}))
+
+	logs, err := audit.ListByDocument(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	require.Len(t, logs, 3)
+	assert.Equal(t, "document.classified", logs[0].Action)
+	assert.Equal(t, "agent_run.failed", logs[1].Action)
+	assert.Equal(t, "review.approved", logs[2].Action)
+	assert.Equal(t, "invoice", logs[0].Metadata["document_type"])
+}
+
 func TestToolExecutionRepo_RecordAndListByAgentRun(t *testing.T) {
 	reset(t)
 	ctx := context.Background()

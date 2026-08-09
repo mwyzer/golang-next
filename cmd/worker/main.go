@@ -51,6 +51,7 @@ func main() {
 		OCR:             ocr.StubProvider{Store: store},
 		LLM:             llm.StubProvider{},
 		MaxIterations:   int(cfg.MaxAgentIterations),
+		ToolTimeout:     time.Duration(cfg.ToolTimeoutSecs) * time.Second,
 	}
 
 	pollInterval := time.Duration(cfg.PollIntervalSecs) * time.Second

@@ -10,9 +10,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -47,6 +49,10 @@ type Runner struct {
 	OCR             ocr.Provider
 	LLM             llm.Provider
 	MaxIterations   int
+	// ToolTimeout bounds each call to an external provider (OCR, LLM).
+	// Zero disables the timeout (NFR-3: "Agent tool calls SHALL have
+	// configurable timeouts" — configurable includes "off").
+	ToolTimeout time.Duration
 }
 
 // PollOnce claims and fully processes at most one UPLOADED document. It
@@ -81,12 +87,15 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "max_iterations_exceeded")
 		return
 	}
-	text, err := r.OCR.ExtractText(ctx, doc.FilePath)
+	toolCtx, cancel := r.withToolTimeout(ctx)
+	text, err := r.OCR.ExtractText(toolCtx, doc.FilePath)
+	cancel()
 	ocrInput := map[string]any{"document_id": documentID, "file_path": doc.FilePath}
 	if err != nil {
+		status, reason := toolFailure(err, "ocr_failed", "ocr_timeout")
 		_ = r.ToolExecutions.Record(ctx, agentRunID, toolRunOCR, ocrInput,
-			map[string]any{"error": err.Error()}, domain.ToolExecutionFailed)
-		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "ocr_failed")
+			map[string]any{"error": err.Error()}, status)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, reason)
 		return
 	}
 	_ = r.ToolExecutions.Record(ctx, agentRunID, toolRunOCR, ocrInput,
@@ -98,12 +107,15 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "max_iterations_exceeded")
 		return
 	}
-	result, err := r.LLM.Classify(ctx, text)
+	toolCtx, cancel = r.withToolTimeout(ctx)
+	result, err := r.LLM.Classify(toolCtx, text)
+	cancel()
 	classifyInput := map[string]any{"document_id": documentID, "text_length": len(text)}
 	if err != nil {
+		status, reason := toolFailure(err, "classification_failed", "classification_timeout")
 		_ = r.ToolExecutions.Record(ctx, agentRunID, toolClassifyDocument, classifyInput,
-			map[string]any{"error": err.Error()}, domain.ToolExecutionFailed)
-		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "classification_failed")
+			map[string]any{"error": err.Error()}, status)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, reason)
 		return
 	}
 	_ = r.ToolExecutions.Record(ctx, agentRunID, toolClassifyDocument, classifyInput,
@@ -139,12 +151,15 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		return
 	}
 
-	extraction, err := r.LLM.Extract(ctx, text, schema)
+	toolCtx, cancel = r.withToolTimeout(ctx)
+	extraction, err := r.LLM.Extract(toolCtx, text, schema)
+	cancel()
 	extractInput := map[string]any{"document_id": documentID, "document_type": result.DocumentType, "schema": schema}
 	if err != nil {
+		status, reason := toolFailure(err, "extraction_failed", "extraction_timeout")
 		_ = r.ToolExecutions.Record(ctx, agentRunID, toolExtractFields, extractInput,
-			map[string]any{"error": err.Error()}, domain.ToolExecutionFailed)
-		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "extraction_failed")
+			map[string]any{"error": err.Error()}, status)
+		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, reason)
 		return
 	}
 
@@ -375,6 +390,29 @@ func (r *Runner) fail(ctx context.Context, tenantID, documentID, agentRunID stri
 			map[string]any{"reason": reason, "document_id": documentID})
 	}
 	log.Printf("agent run %s: document %s failed (%s)", agentRunID, documentID, reason)
+}
+
+// withToolTimeout returns a context bounded by r.ToolTimeout, and a
+// cancel func the caller must invoke once the tool call returns (or
+// the passed-through parent context and a no-op cancel, if
+// ToolTimeout is unset).
+func (r *Runner) withToolTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if r.ToolTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, r.ToolTimeout)
+}
+
+// toolFailure classifies an error from an external tool call into the
+// ToolExecution status and agent-run failure reason to record — a
+// context deadline is a TIMEOUT, not a generic FAILED (NFR-3, SRS
+// Feature: Agent Tool Execution — "every tool execution is recorded
+// with a status: success, failed, or timeout").
+func toolFailure(err error, failedReason, timeoutReason string) (domain.ToolExecutionStatus, string) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return domain.ToolExecutionTimeout, timeoutReason
+	}
+	return domain.ToolExecutionFailed, failedReason
 }
 
 // keyFieldsHash returns a deterministic hash of every extracted field

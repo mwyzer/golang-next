@@ -275,9 +275,9 @@ enterprise tenant administration.
      count is exceeded.
 
 - **Acceptance Criteria:**
-  - [ ] The agent never invokes a tool outside the registry.
-  - [ ] Agent runs terminate at a terminal state or the iteration cap, whichever comes first.
-  - [ ] Every tool execution is recorded with a status (`success`, `failed`, `timeout`).
+  - [x] The agent never invokes a tool outside the registry. (Enforced by construction — `internal/agent/runner.go` only ever calls the seven fixed tool functions, no dynamic dispatch.)
+  - [x] Agent runs terminate at a terminal state or the iteration cap, whichever comes first.
+  - [x] Every tool execution is recorded with a status (`SUCCESS`, `FAILED`, `TIMEOUT`). (`TIMEOUT` added via `Runner.ToolTimeout`, bounding the `run_ocr`/`classify_document`/`extract_fields` provider calls — NFR-3.)
 
 ### Feature: Audit Logging
 
@@ -286,9 +286,9 @@ enterprise tenant administration.
   execution, and reviewer decision in an auditable, append-only log.
 
 - **Acceptance Criteria:**
-  - [ ] Audit entries include actor, action, entity, entity ID, and timestamp.
-  - [ ] Audit entries are immutable once written.
-  - [ ] Audit history for a document can be retrieved via the API.
+  - [x] Audit entries include actor, action, entity, entity ID, and timestamp.
+  - [ ] Audit entries are immutable once written. (No update/delete method exists in `AuditLogRepo` by convention; not enforced at the DB level, e.g. no `REVOKE UPDATE`.)
+  - [x] Audit history for a document can be retrieved via the API.
 
 ### Feature: Asynchronous Processing
 

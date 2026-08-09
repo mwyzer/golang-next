@@ -33,6 +33,7 @@ func NewRouter(deps Deps) http.Handler {
 		AgentRuns:       deps.AgentRuns,
 		ToolExecs:       deps.ToolExecs,
 		ExtractedFields: deps.ExtractedFields,
+		Audit:           deps.Audit,
 		Store:           deps.Store,
 		MaxUploadSize:   deps.MaxUploadSize,
 	}
@@ -58,6 +59,7 @@ func NewRouter(deps Deps) http.Handler {
 		r.Post("/documents", docs.Upload)
 		r.Get("/documents/{id}", docs.Get)
 		r.Get("/documents/{id}/agent-runs", docs.ListAgentRuns)
+		r.Get("/documents/{id}/audit-log", docs.ListAuditLog)
 
 		r.Group(func(r chi.Router) {
 			r.Use(RequireRole(deps.Users, reviewerRoles...))

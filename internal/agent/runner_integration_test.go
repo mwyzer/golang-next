@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,29 +49,56 @@ func reset(t *testing.T) {
 
 // fakeLLM lets each test dictate exactly what classification/extraction
 // the agent sees, instead of depending on llm.StubProvider's keyword
-// and "Label: value" text heuristics.
+// and "Label: value" text heuristics. A non-zero delay blocks until it
+// elapses or ctx is cancelled first, letting timeout tests simulate a
+// slow provider without actually waiting out the timeout.
 type fakeLLM struct {
 	classifyResult llm.ClassifyResult
 	classifyErr    error
 	extractFields  map[string]llm.FieldExtraction
 	extractErr     error
+	delay          time.Duration
 }
 
-func (f fakeLLM) Classify(context.Context, string) (llm.ClassifyResult, error) {
+func (f fakeLLM) Classify(ctx context.Context, _ string) (llm.ClassifyResult, error) {
+	if err := waitOrCancel(ctx, f.delay); err != nil {
+		return llm.ClassifyResult{}, err
+	}
 	return f.classifyResult, f.classifyErr
 }
 
-func (f fakeLLM) Extract(context.Context, string, map[string]string) (llm.ExtractResult, error) {
+func (f fakeLLM) Extract(ctx context.Context, _ string, _ map[string]string) (llm.ExtractResult, error) {
+	if err := waitOrCancel(ctx, f.delay); err != nil {
+		return llm.ExtractResult{}, err
+	}
 	return llm.ExtractResult{Fields: f.extractFields}, f.extractErr
 }
 
 type fakeOCR struct {
-	text string
-	err  error
+	text  string
+	err   error
+	delay time.Duration
 }
 
-func (f fakeOCR) ExtractText(context.Context, string) (string, error) {
+func (f fakeOCR) ExtractText(ctx context.Context, _ string) (string, error) {
+	if err := waitOrCancel(ctx, f.delay); err != nil {
+		return "", err
+	}
 	return f.text, f.err
+}
+
+// waitOrCancel blocks for delay, returning early with ctx.Err() if the
+// context is cancelled (e.g. by Runner.ToolTimeout) first.
+func waitOrCancel(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	select {
+	case <-time.After(delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // validInvoiceFields satisfies the seeded "invoice" schema
@@ -443,6 +471,83 @@ func TestRunner_ClassificationFailure(t *testing.T) {
 	require.Len(t, execs, 2, "run_ocr should succeed before classify_document fails")
 	assert.Equal(t, "classify_document", execs[1].ToolName)
 	assert.Equal(t, domain.ToolExecutionFailed, execs[1].Status)
+}
+
+func TestRunner_OCRTimeout(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	doc := uploadDocument(t, nil)
+
+	r := newRunner(fakeOCR{text: "invoice text", delay: 200 * time.Millisecond}, fakeLLM{}, 10)
+	r.ToolTimeout = 20 * time.Millisecond
+
+	processed, err := r.PollOnce(ctx)
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	got, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusFailed, got.Status)
+
+	runs, err := db.NewAgentRunRepo(pool).ListByDocument(ctx, doc.ID)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, domain.AgentRunFailed, runs[0].Status)
+	assert.Equal(t, "ocr_timeout", auditReason(t, domain.AuditEntityAgentRun, runs[0].ID))
+
+	execs, err := db.NewToolExecutionRepo(pool).ListByAgentRun(ctx, runs[0].ID)
+	require.NoError(t, err)
+	require.Len(t, execs, 1)
+	assert.Equal(t, "run_ocr", execs[0].ToolName)
+	assert.Equal(t, domain.ToolExecutionTimeout, execs[0].Status,
+		"a timed-out tool call must be recorded as TIMEOUT, not FAILED")
+}
+
+func TestRunner_ClassifyTimeout(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	doc := uploadDocument(t, nil)
+
+	r := newRunner(fakeOCR{text: "invoice text"}, fakeLLM{delay: 200 * time.Millisecond}, 10)
+	r.ToolTimeout = 20 * time.Millisecond
+
+	processed, err := r.PollOnce(ctx)
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	got, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusFailed, got.Status)
+
+	runs, err := db.NewAgentRunRepo(pool).ListByDocument(ctx, doc.ID)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, "classification_timeout", auditReason(t, domain.AuditEntityAgentRun, runs[0].ID))
+}
+
+func TestRunner_ToolTimeout_ZeroMeansDisabled(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	doc := uploadDocument(t, nil)
+
+	r := newRunner(
+		fakeOCR{text: "invoice text", delay: 50 * time.Millisecond},
+		fakeLLM{
+			classifyResult: llm.ClassifyResult{DocumentType: domain.DocumentTypeInvoice, Confidence: 0.95},
+			extractFields:  validInvoiceFields(0.95),
+		},
+		10,
+	)
+	// r.ToolTimeout left at its zero value: a slow-but-successful
+	// provider must not be spuriously cut off.
+
+	processed, err := r.PollOnce(ctx)
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	got, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusAutoProcessed, got.Status)
 }
 
 func TestRunner_OCRFailure(t *testing.T) {

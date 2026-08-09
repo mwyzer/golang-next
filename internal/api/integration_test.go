@@ -385,6 +385,34 @@ func TestReviewFlow_NotReviewableWhenNotPending(t *testing.T) {
 	assert.Equal(t, "NOT_REVIEWABLE", respBody["error"]["code"])
 }
 
+func TestAuditLog_ListForDocument(t *testing.T) {
+	reset(t)
+	srv := newTestServer(t)
+
+	doc := createDocumentAt(t, domain.StatusUploaded)
+	require.NoError(t, db.NewAuditLogRepo(pool).Record(context.Background(), devTenantID, "agent",
+		"document.classified", domain.AuditEntityDocument, doc.ID, map[string]any{"document_type": "invoice"}))
+
+	resp := authedRequest(t, http.MethodGet, srv.URL+"/api/v1/documents/"+doc.ID+"/audit-log", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body struct {
+		AuditLog []map[string]any `json:"audit_log"`
+	}
+	decodeJSON(t, resp, &body)
+	require.Len(t, body.AuditLog, 1)
+	assert.Equal(t, "document.classified", body.AuditLog[0]["action"])
+	assert.Equal(t, "agent", body.AuditLog[0]["actor"])
+}
+
+func TestAuditLog_NotFoundForUnknownDocument(t *testing.T) {
+	reset(t)
+	srv := newTestServer(t)
+
+	resp := authedRequest(t, http.MethodGet, srv.URL+"/api/v1/documents/"+uuid.NewString()+"/audit-log", nil)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
 func TestRequireRole_ForbidsNonReviewers(t *testing.T) {
 	reset(t)
 	srv := newTestServer(t)

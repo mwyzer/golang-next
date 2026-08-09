@@ -21,6 +21,7 @@ type DocumentsHandler struct {
 	AgentRuns       *db.AgentRunRepo
 	ToolExecs       *db.ToolExecutionRepo
 	ExtractedFields *db.ExtractedFieldRepo
+	Audit           *db.AuditLogRepo
 	Store           storage.Store
 	MaxUploadSize   int64
 }
@@ -179,6 +180,53 @@ func (h *DocumentsHandler) ListAgentRuns(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"agent_runs": views})
+}
+
+// ListAuditLog implements GET /documents/{id}/audit-log (SRS Feature:
+// Audit Logging — "audit history for a document can be retrieved via
+// the API").
+func (h *DocumentsHandler) ListAuditLog(w http.ResponseWriter, r *http.Request) {
+	tenantID := tenantIDFromContext(r.Context())
+	id := chi.URLParam(r, "id")
+
+	// Confirm the document exists and belongs to this tenant before
+	// exposing its audit trail (NFR-5).
+	if _, err := h.Repo.GetByID(r.Context(), tenantID, id); errors.Is(err, domain.ErrDocumentNotFound) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "document not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "DB_ERROR", "failed to load document")
+		return
+	}
+
+	logs, err := h.Audit.ListByDocument(r.Context(), tenantID, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "DB_ERROR", "failed to load audit log")
+		return
+	}
+
+	type entryView struct {
+		Actor      string                 `json:"actor"`
+		Action     string                 `json:"action"`
+		EntityType domain.AuditEntityType `json:"entity_type"`
+		EntityID   string                 `json:"entity_id"`
+		Metadata   map[string]any         `json:"metadata"`
+		CreatedAt  string                 `json:"created_at"`
+	}
+
+	views := make([]entryView, 0, len(logs))
+	for _, l := range logs {
+		views = append(views, entryView{
+			Actor:      l.Actor,
+			Action:     l.Action,
+			EntityType: l.EntityType,
+			EntityID:   l.EntityID,
+			Metadata:   l.Metadata,
+			CreatedAt:  l.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"audit_log": views})
 }
 
 // detectMimeType prefers the client-supplied Content-Type but falls back

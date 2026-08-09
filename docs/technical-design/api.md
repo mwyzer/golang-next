@@ -22,16 +22,54 @@ and satisfying FR-16 of [Requirements](../REQUIREMENTS.md).
 | POST | `/documents` | Upload a document | Yes |
 | GET | `/documents/{id}` | Get document detail, status, extracted fields | Yes |
 | GET | `/documents/{id}/agent-runs` | List agent runs for a document, each with its tool executions | Yes |
+| GET | `/documents/{id}/audit-log` | Get audit history for a document (spans `document.*`, `agent_run.*`, and `review.*` entries tied to it) | Yes |
 | GET | `/review-queue` | List documents pending human review | Yes (reviewer) |
 | POST | `/documents/{id}/review` | Submit a review decision (approve/reject/correct) | Yes (reviewer) |
 
 The following were designed but are **not implemented**: `GET /documents`
-(list/filter), `GET /documents/{id}/status` (redundant with the status
-already returned by `GET /documents/{id}`), `GET /agent-runs/{id}`
-(only the list-by-document form exists), and `GET /documents/{id}/audit-log`
-(audit logs are currently write-only via the API — query the
-`audit_logs` table directly against Postgres in the meantime, see the
-[README's Docker Compose section](../../README.md#operating-with-docker-compose)).
+(list/filter) and `GET /agent-runs/{id}` (only the list-by-document
+form exists). `GET /documents/{id}/status` was also dropped from the
+design — it would have been redundant with the status `GET /documents/{id}`
+already returns.
+
+### `GET /documents/{id}/audit-log`
+
+#### GET /documents/{id}/audit-log — Response 200
+
+```json
+{
+  "audit_log": [
+    {
+      "actor": "agent",
+      "action": "document.classified",
+      "entity_type": "document",
+      "entity_id": "DOC-001",
+      "metadata": { "document_type": "invoice", "confidence": 0.95 },
+      "created_at": "2026-08-09T10:00:05Z"
+    },
+    {
+      "actor": "user-42",
+      "action": "review.approved",
+      "entity_type": "review_task",
+      "entity_id": "RT-001",
+      "metadata": { "decision": "approve" },
+      "created_at": "2026-08-09T10:05:00Z"
+    }
+  ]
+}
+```
+
+Ordered oldest first. `entity_id` differs per row — `document` entries
+are keyed by the document's own ID, but `agent_run`/`review_task`
+entries are keyed by that agent run's or review task's ID, since a
+single document can have several of each over its lifetime.
+
+#### GET /documents/{id}/audit-log — Errors
+
+| Status | Condition |
+| --- | --- |
+| 401 | Missing/invalid auth token |
+| 404 | Document not found, or belongs to a different tenant |
 
 ### `POST /documents`
 

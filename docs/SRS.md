@@ -230,8 +230,8 @@ enterprise tenant administration.
   ```
 
 - **Acceptance Criteria:**
-  - [ ] Exact re-uploads of the same file are always flagged.
-  - [ ] Near-duplicates based on key fields are flagged for human review, not auto-rejected.
+  - [x] Exact re-uploads of the same file are always flagged.
+  - [x] Near-duplicates based on key fields are flagged for human review, not auto-rejected.
 
 ### Feature: Human Review
 

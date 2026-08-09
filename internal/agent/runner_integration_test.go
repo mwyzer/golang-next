@@ -300,6 +300,49 @@ func TestRunner_RouteToReview_Duplicate(t *testing.T) {
 	assert.Equal(t, 5, runs[0].IterationCount)
 }
 
+func TestRunner_RouteToReview_NearDuplicateByKeyFields(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+
+	r := newRunner(
+		fakeOCR{text: "invoice text"},
+		fakeLLM{
+			classifyResult: llm.ClassifyResult{DocumentType: domain.DocumentTypeInvoice, Confidence: 0.95},
+			extractFields:  validInvoiceFields(0.95),
+		},
+		10,
+	)
+
+	// The first document establishes the key_fields_hash baseline —
+	// content differs from the second (uploadDocument assigns each a
+	// fresh random content hash), but the extracted values will be
+	// identical, which an exact content-hash check wouldn't catch.
+	first := uploadDocument(t, nil)
+	processed, err := r.PollOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, processed)
+	firstDoc, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, first.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusAutoProcessed, firstDoc.Status,
+		"sanity check: first document should clear every gate and record a key_fields_hash along the way")
+
+	second := uploadDocument(t, nil)
+	processed, err = r.PollOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, processed)
+
+	got, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, second.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusPendingReview, got.Status)
+	assert.True(t, got.IsDuplicate)
+	require.NotNil(t, got.DuplicateOfDocumentID)
+	assert.Equal(t, first.ID, *got.DuplicateOfDocumentID)
+
+	task, err := db.NewReviewTaskRepo(pool).GetPendingByDocument(ctx, second.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ReviewReasonDuplicate, task.Reason)
+}
+
 func TestRunner_RouteToReview_LowConfidence(t *testing.T) {
 	reset(t)
 	ctx := context.Background()
@@ -372,6 +415,34 @@ func TestRunner_MaxIterationsExceeded(t *testing.T) {
 	// routing decision.
 	_, err = db.NewReviewTaskRepo(pool).GetPendingByDocument(ctx, doc.ID)
 	assert.ErrorIs(t, err, db.ErrReviewTaskNotFound)
+}
+
+func TestRunner_ClassificationFailure(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	doc := uploadDocument(t, nil)
+
+	r := newRunner(fakeOCR{text: "invoice text"}, fakeLLM{classifyErr: assert.AnError}, 10)
+
+	processed, err := r.PollOnce(ctx)
+	require.NoError(t, err)
+	assert.True(t, processed)
+
+	got, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusFailed, got.Status)
+
+	runs, err := db.NewAgentRunRepo(pool).ListByDocument(ctx, doc.ID)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, domain.AgentRunFailed, runs[0].Status)
+	assert.Equal(t, "classification_failed", auditReason(t, domain.AuditEntityAgentRun, runs[0].ID))
+
+	execs, err := db.NewToolExecutionRepo(pool).ListByAgentRun(ctx, runs[0].ID)
+	require.NoError(t, err)
+	require.Len(t, execs, 2, "run_ocr should succeed before classify_document fails")
+	assert.Equal(t, "classify_document", execs[1].ToolName)
+	assert.Equal(t, domain.ToolExecutionFailed, execs[1].Status)
 }
 
 func TestRunner_OCRFailure(t *testing.T) {

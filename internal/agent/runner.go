@@ -8,8 +8,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
+	"sort"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -181,6 +184,13 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		domain.AuditEntityDocument, documentID,
 		map[string]any{"field_count": len(fields), "missing_count": missing, "agent_run_id": agentRunID})
 
+	// Only a complete extraction (no missing fields) is trustworthy
+	// enough to use for near-duplicate matching in step 5 — see
+	// keyFieldsHash.
+	if hash, ok := keyFieldsHash(extraction.Fields); ok {
+		_ = r.Documents.SetKeyFieldsHash(ctx, documentID, hash)
+	}
+
 	// Step 4: validate_extraction
 	iterations++
 	if iterations > r.MaxIterations {
@@ -217,18 +227,42 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "max_iterations_exceeded")
 		return
 	}
-	earliest, foundAny, err := r.Documents.FindByContentHash(ctx, doc.TenantID, doc.ContentHash)
 	checkDupInput := map[string]any{"document_id": documentID, "content_hash": doc.ContentHash}
+
+	earliest, foundAny, err := r.Documents.FindByContentHash(ctx, doc.TenantID, doc.ContentHash)
 	if err != nil {
 		_ = r.ToolExecutions.Record(ctx, agentRunID, toolCheckDuplicate, checkDupInput,
 			map[string]any{"error": err.Error()}, domain.ToolExecutionFailed)
 		r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "duplicate_check_failed")
 		return
 	}
+	matchType := "exact_content_hash"
 	isDuplicate := foundAny && earliest.ID != documentID
+
+	// An exact content-hash match already settles it; only fall back to
+	// key-fields matching (e.g. the same invoice rescanned, different
+	// file bytes but identical vendor/amount/date) when that misses.
+	if !isDuplicate {
+		if hash, ok := keyFieldsHash(extraction.Fields); ok {
+			nearMatch, foundNear, err := r.Documents.FindByKeyFieldsHash(ctx, doc.TenantID, result.DocumentType, hash)
+			if err != nil {
+				_ = r.ToolExecutions.Record(ctx, agentRunID, toolCheckDuplicate, checkDupInput,
+					map[string]any{"error": err.Error()}, domain.ToolExecutionFailed)
+				r.fail(ctx, doc.TenantID, documentID, agentRunID, iterations, "duplicate_check_failed")
+				return
+			}
+			if foundNear && nearMatch.ID != documentID {
+				earliest = nearMatch
+				isDuplicate = true
+				matchType = "near_duplicate_key_fields"
+			}
+		}
+	}
+
 	checkDupOutput := map[string]any{"is_duplicate": isDuplicate}
 	if isDuplicate {
 		checkDupOutput["duplicate_of"] = earliest.ID
+		checkDupOutput["match_type"] = matchType
 	}
 	_ = r.ToolExecutions.Record(ctx, agentRunID, toolCheckDuplicate, checkDupInput, checkDupOutput, domain.ToolExecutionSuccess)
 
@@ -237,7 +271,8 @@ func (r *Runner) process(ctx context.Context, documentID, agentRunID string) {
 			log.Printf("agent run %s: mark duplicate: %v", agentRunID, err)
 		}
 		r.routeToReview(ctx, doc.TenantID, documentID, agentRunID, iterations,
-			domain.ReviewReasonDuplicate, nil, nil, map[string]any{"duplicate_of": earliest.ID})
+			domain.ReviewReasonDuplicate, nil, nil,
+			map[string]any{"duplicate_of": earliest.ID, "match_type": matchType})
 		return
 	}
 
@@ -340,4 +375,28 @@ func (r *Runner) fail(ctx context.Context, tenantID, documentID, agentRunID stri
 			map[string]any{"reason": reason, "document_id": documentID})
 	}
 	log.Printf("agent run %s: document %s failed (%s)", agentRunID, documentID, reason)
+}
+
+// keyFieldsHash returns a deterministic hash of every extracted field
+// value, used by check_duplicate to catch near-duplicates an exact
+// content-hash match would miss (e.g. the same invoice rescanned,
+// different file bytes but identical vendor/amount/date). It returns
+// ok=false if any field is missing — a partial extraction isn't a
+// reliable basis for matching against another document's full set of
+// key fields, and would risk false-positive duplicate flags.
+func keyFieldsHash(fields map[string]llm.FieldExtraction) (hash string, ok bool) {
+	names := make([]string, 0, len(fields))
+	for name, fe := range fields {
+		if fe.Value == nil {
+			return "", false
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	h := sha256.New()
+	for _, name := range names {
+		fmt.Fprintf(h, "%s=%v\n", name, fields[name].Value)
+	}
+	return hex.EncodeToString(h.Sum(nil)), true
 }

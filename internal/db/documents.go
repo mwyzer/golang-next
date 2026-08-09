@@ -218,6 +218,55 @@ func (r *DocumentRepo) MarkFailed(ctx context.Context, id string) error {
 	return nil
 }
 
+// SetKeyFieldsHash persists a deterministic hash of a document's
+// extracted key fields, used for near-duplicate detection (FR-10, SRS
+// Feature: Duplicate Detection — "near-duplicates based on key fields
+// are flagged for human review"). Callers only set this when every
+// schema field was found (no missing values), so a partial extraction
+// never produces a false-positive match against another document.
+func (r *DocumentRepo) SetKeyFieldsHash(ctx context.Context, id, hash string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents SET key_fields_hash = $1 WHERE id = $2`,
+		hash, id,
+	)
+	if err != nil {
+		return fmt.Errorf("set document key fields hash: %w", err)
+	}
+	return nil
+}
+
+// FindByKeyFieldsHash returns the earliest document of the same type
+// for the tenant whose extracted key fields hash to the same value —
+// a near-duplicate (e.g. the same invoice rescanned, producing a
+// different file and content hash but identical vendor/amount/date)
+// that FindByContentHash would miss.
+func (r *DocumentRepo) FindByKeyFieldsHash(ctx context.Context, tenantID, documentTypeID, hash string) (domain.Document, bool, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, uploaded_by, document_type_id, status, file_path,
+		       mime_type, file_size_bytes, content_hash, classification_confidence,
+		       overall_confidence, is_duplicate, duplicate_of_document_id,
+		       created_at, updated_at
+		FROM documents
+		WHERE tenant_id = $1 AND document_type_id = $2 AND key_fields_hash = $3
+		ORDER BY created_at ASC
+		LIMIT 1`, tenantID, documentTypeID, hash)
+
+	var d domain.Document
+	err := row.Scan(
+		&d.ID, &d.TenantID, &d.UploadedBy, &d.DocumentTypeID, &d.Status, &d.FilePath,
+		&d.MimeType, &d.FileSizeBytes, &d.ContentHash, &d.ClassificationConfidence,
+		&d.OverallConfidence, &d.IsDuplicate, &d.DuplicateOfDocumentID,
+		&d.CreatedAt, &d.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Document{}, false, nil
+	}
+	if err != nil {
+		return domain.Document{}, false, fmt.Errorf("find document by key fields hash: %w", err)
+	}
+	return d, true, nil
+}
+
 // FindByContentHash returns the first document with a matching content
 // hash for the tenant, used for exact-duplicate detection (FR-10).
 func (r *DocumentRepo) FindByContentHash(ctx context.Context, tenantID, hash string) (domain.Document, bool, error) {

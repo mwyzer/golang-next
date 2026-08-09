@@ -51,6 +51,7 @@ Every table carries `tenant_id` to keep the schema multi-tenant-ready
 | mime_type | text | NOT NULL | |
 | file_size_bytes | bigint | NOT NULL | |
 | content_hash | text | NOT NULL | Used for exact-duplicate detection (FR-10) |
+| key_fields_hash | text | NULL | Hash of extracted key fields, used for near-duplicate detection once extraction completes with no missing fields (FR-10) |
 | classification_confidence | numeric | NULL | |
 | overall_confidence | numeric | NULL | |
 | is_duplicate | boolean | NOT NULL DEFAULT false | |
@@ -139,6 +140,7 @@ Every table carries `tenant_id` to keep the schema multi-tenant-ready
 | --- | --- | --- | --- |
 | documents | (tenant_id, status) | btree | Filter documents by status per tenant |
 | documents | (content_hash) | btree | Exact-duplicate lookup (FR-10) |
+| documents | (tenant_id, document_type_id, key_fields_hash) WHERE key_fields_hash IS NOT NULL | btree, partial | Near-duplicate lookup (FR-10) |
 | extracted_fields | (document_id) | btree | Load all fields for a document |
 | agent_runs | (document_id) | btree | Load runs for a document |
 | tool_executions | (agent_run_id) | btree | Load executions for a run |

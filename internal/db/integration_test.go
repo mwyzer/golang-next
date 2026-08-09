@@ -225,6 +225,42 @@ func TestDocumentRepo_FindByContentHash(t *testing.T) {
 	assert.False(t, found)
 }
 
+func TestDocumentRepo_SetAndFindByKeyFieldsHash(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	repo := db.NewDocumentRepo(pool)
+
+	hash := uuid.NewString()
+	first := newDocument(t, repo, nil)
+	require.NoError(t, repo.MarkClassified(ctx, first.ID, domain.DocumentTypeInvoice, 0.9))
+	require.NoError(t, repo.SetKeyFieldsHash(ctx, first.ID, hash))
+
+	second := newDocument(t, repo, nil)
+	require.NoError(t, repo.MarkClassified(ctx, second.ID, domain.DocumentTypeInvoice, 0.9))
+	require.NoError(t, repo.SetKeyFieldsHash(ctx, second.ID, hash))
+
+	got, found, err := repo.FindByKeyFieldsHash(ctx, devTenantID, domain.DocumentTypeInvoice, hash)
+	require.NoError(t, err)
+	require.True(t, found)
+	// Earliest match wins, same guarantee as FindByContentHash.
+	assert.Equal(t, first.ID, got.ID)
+
+	_, found, err = repo.FindByKeyFieldsHash(ctx, devTenantID, domain.DocumentTypeInvoice, uuid.NewString())
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	// The same hash under a different document type must not match —
+	// key fields aren't comparable across schemas.
+	other := newDocument(t, repo, nil)
+	require.NoError(t, repo.MarkClassified(ctx, other.ID, domain.DocumentTypeReceipt, 0.9))
+	require.NoError(t, repo.SetKeyFieldsHash(ctx, other.ID, hash))
+
+	got2, found2, err := repo.FindByKeyFieldsHash(ctx, devTenantID, domain.DocumentTypeReceipt, hash)
+	require.NoError(t, err)
+	require.True(t, found2)
+	assert.Equal(t, other.ID, got2.ID)
+}
+
 func TestExtractedFieldRepo_InsertBatchAndListByDocument(t *testing.T) {
 	reset(t)
 	ctx := context.Background()

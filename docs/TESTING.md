@@ -9,7 +9,7 @@ Verifies the [Implementation](IMPLEMENTATION.md) against the
 | --- | --- | --- | --- |
 | Unit | Validation rules, LLM stub provider, upload MIME/size validation, API client + upload/review-queue/review-detail pages | Go `testing` + `testify`; Vitest + React Testing Library | `internal/validation`, `internal/providers/llm`, `internal/api` (`validate_test.go`); `web/lib/api.test.ts`, `web/app/**/*.test.tsx` |
 | Integration | Every `internal/db` repo, plus API endpoints (upload/get/review/queue/auth) against a real Postgres | Go `testing` + `testcontainers-go` | `internal/db/integration_test.go`, `internal/api/integration_test.go` |
-| Agent | Full agent-run scenarios: auto-process happy path, all four review-routing reasons (unknown type, validation failed, duplicate, low confidence), max-iterations exceeded, OCR failure | Go, with a fake `llm.Provider`/`ocr.Provider` | `internal/agent/runner_integration_test.go` |
+| Agent | Full agent-run scenarios: auto-process happy path, all four review-routing reasons (unknown type, validation failed, exact-duplicate, near-duplicate by key fields, low confidence), max-iterations exceeded, OCR/classification failures | Go, with a fake `llm.Provider`/`ocr.Provider` | `internal/agent/runner_integration_test.go` |
 | End-to-End | Upload → process → review → completed, through the real HTTP API plus a real worker polling loop (production stub OCR/LLM providers, not test fakes) | Go `testing` + `testcontainers-go` | `e2e/e2e_test.go` |
 
 Frontend tests (`web/`) mock `@/lib/api` (or `fetch`, for `api.test.ts`

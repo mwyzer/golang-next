@@ -56,6 +56,10 @@ func reset(t *testing.T) {
 }
 
 func newTestServer(t *testing.T) *httptest.Server {
+	return newTestServerWithMaxUpload(t, 20*1024*1024)
+}
+
+func newTestServerWithMaxUpload(t *testing.T, maxUploadSize int64) *httptest.Server {
 	t.Helper()
 	store, err := storage.NewLocalStore(t.TempDir())
 	require.NoError(t, err)
@@ -69,7 +73,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 		Users:           db.NewUserRepo(pool),
 		Audit:           db.NewAuditLogRepo(pool),
 		Store:           store,
-		MaxUploadSize:   20 * 1024 * 1024,
+		MaxUploadSize:   maxUploadSize,
 		APIToken:        apiToken,
 	}
 
@@ -231,6 +235,19 @@ func TestUpload_UnsupportedFileType(t *testing.T) {
 	assert.Equal(t, "UNSUPPORTED_FILE_TYPE", body["error"]["code"])
 }
 
+func TestUpload_FileTooLarge(t *testing.T) {
+	reset(t)
+	srv := newTestServerWithMaxUpload(t, 10) // bytes
+
+	resp := uploadRequest(t, srv, apiToken, "invoice.pdf", "application/pdf",
+		[]byte("this file content is well over ten bytes"))
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+
+	var body map[string]map[string]string
+	decodeJSON(t, resp, &body)
+	assert.Equal(t, "FILE_TOO_LARGE", body["error"]["code"])
+}
+
 func TestUpload_MissingFile(t *testing.T) {
 	reset(t)
 	srv := newTestServer(t)
@@ -268,6 +285,10 @@ func TestReviewFlow_Approve(t *testing.T) {
 
 	doc := createDocumentAt(t, domain.StatusPendingReview)
 	require.NoError(t, db.NewReviewTaskRepo(pool).Create(context.Background(), doc.ID, domain.ReviewReasonLowConfidence))
+	// Fetched before resolving: GetPendingByDocument only returns PENDING
+	// tasks, and we need the task ID to check the audit trail afterward.
+	task, err := db.NewReviewTaskRepo(pool).GetPendingByDocument(context.Background(), doc.ID)
+	require.NoError(t, err)
 
 	// The document should show up in the review queue before it's resolved.
 	queueResp := authedRequest(t, http.MethodGet, srv.URL+"/api/v1/review-queue", nil)
@@ -293,6 +314,17 @@ func TestReviewFlow_Approve(t *testing.T) {
 	got, err := db.NewDocumentRepo(pool).GetByID(context.Background(), devTenantID, doc.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusReviewed, got.Status)
+
+	// Review decisions must be recorded in the audit log (SRS Human
+	// Review acceptance criterion). AuditLogRepo is write-only by
+	// design, so this checks the table directly.
+	var auditAction string
+	err = pool.QueryRow(context.Background(),
+		`SELECT action FROM audit_logs WHERE entity_type = 'review_task' AND entity_id = $1 ORDER BY created_at DESC LIMIT 1`,
+		task.ID,
+	).Scan(&auditAction)
+	require.NoError(t, err)
+	assert.Equal(t, "review.approved", auditAction)
 
 	// Resolved tasks drop out of the queue.
 	queueResp2 := authedRequest(t, http.MethodGet, srv.URL+"/api/v1/review-queue", nil)

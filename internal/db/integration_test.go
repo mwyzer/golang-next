@@ -5,12 +5,14 @@ package db_test
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"golang-nextjs/internal/db"
 	"golang-nextjs/internal/domain"
@@ -545,4 +547,52 @@ func TestMigrate_IsIdempotent(t *testing.T) {
 	// must be a no-op, not an error (workers and the API both call
 	// db.Migrate on every startup).
 	require.NoError(t, db.Migrate(context.Background(), pool))
+}
+
+func TestMigrate_ConcurrentCallersDoNotRace(t *testing.T) {
+	// Regression test: cmd/api and cmd/worker both call db.Migrate on
+	// startup, and docker-compose starts them at the same moment (both
+	// gated on postgres' healthcheck). Without Migrate's advisory lock,
+	// concurrent callers can each see a migration as "not yet applied"
+	// and race to run it — the loser fails with e.g. "column already
+	// exists" (SQLSTATE 42701). This needs a fresh, unmigrated
+	// container — the shared pool already has migrations applied.
+	ctx := context.Background()
+
+	container, err := postgres.Run(ctx, "pgvector/pgvector:pg16",
+		postgres.WithDatabase("docagent"),
+		postgres.WithUsername("docagent"),
+		postgres.WithPassword("docagent"),
+		postgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	freshPool, err := pgxpool.New(ctx, connStr)
+	require.NoError(t, err)
+	t.Cleanup(freshPool.Close)
+	require.NoError(t, freshPool.Ping(ctx))
+
+	const concurrency = 5
+	errs := make([]error, concurrency)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = db.Migrate(ctx, freshPool)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		assert.NoErrorf(t, err, "concurrent Migrate caller %d", i)
+	}
+
+	var count int
+	require.NoError(t, freshPool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count))
+	assert.Equal(t, 3, count, "each migration should be recorded exactly once despite concurrent callers")
 }

@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
+
+	"golang-nextjs/internal/db"
 )
 
 type ctxKey string
@@ -35,6 +38,27 @@ func RequireAuth(apiToken string) func(http.Handler) http.Handler {
 			ctx := context.WithValue(r.Context(), ctxTenantID, devTenantID)
 			ctx = context.WithValue(ctx, ctxUserID, devUserID)
 			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// RequireRole rejects the request unless the authenticated user's role
+// (from the users table) is one of allowedRoles. Must run after
+// RequireAuth so a user ID is already in context (SRS Feature: Human
+// Review — "only authorized reviewers can act on a review task").
+func RequireRole(users *db.UserRepo, allowedRoles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			role, err := users.GetRole(r.Context(), userIDFromContext(r.Context()))
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "DB_ERROR", "failed to load user role")
+				return
+			}
+			if !slices.Contains(allowedRoles, role) {
+				writeError(w, http.StatusForbidden, "FORBIDDEN", "user is not authorized for this action")
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

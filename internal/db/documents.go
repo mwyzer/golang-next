@@ -187,6 +187,23 @@ func (r *DocumentRepo) MarkAutoProcessed(ctx context.Context, id string, overall
 	return nil
 }
 
+// MarkReviewed records that a human reviewer resolved a PENDING_REVIEW
+// document — the terminal status for the human-reviewed path, whatever
+// the decision (approve/reject/correct); the decision itself lives on
+// the review_tasks row (SRS Feature: Human Review).
+func (r *DocumentRepo) MarkReviewed(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents
+		SET status = $1, updated_at = now()
+		WHERE id = $2`,
+		domain.StatusReviewed, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark document reviewed: %w", err)
+	}
+	return nil
+}
+
 // MarkFailed records that agent processing could not complete (FR-20).
 func (r *DocumentRepo) MarkFailed(ctx context.Context, id string) error {
 	_, err := r.pool.Exec(ctx, `

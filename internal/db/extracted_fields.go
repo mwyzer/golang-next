@@ -55,13 +55,18 @@ func (r *ExtractedFieldRepo) InsertBatch(ctx context.Context, documentID string,
 	return nil
 }
 
-// ListByDocument returns all extracted fields for a document.
+// ListByDocument returns the current value of every extracted field for
+// a document — the most recent row per field name, so a reviewer
+// correction (source=review_correction) shadows the original
+// extraction rather than appearing as a second entry. Both rows stay in
+// the table; nothing is overwritten or deleted.
 func (r *ExtractedFieldRepo) ListByDocument(ctx context.Context, documentID string) ([]domain.ExtractedField, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, document_id, field_name, field_value, confidence, source, created_at
+		SELECT DISTINCT ON (field_name)
+		       id, document_id, field_name, field_value, confidence, source, created_at
 		FROM extracted_fields
 		WHERE document_id = $1
-		ORDER BY field_name ASC`, documentID)
+		ORDER BY field_name ASC, created_at DESC`, documentID)
 	if err != nil {
 		return nil, fmt.Errorf("list extracted fields: %w", err)
 	}

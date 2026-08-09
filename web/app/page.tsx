@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { getDocument, uploadDocument, type Document } from "@/lib/api";
 
 export default function UploadPage() {
@@ -37,6 +38,9 @@ export default function UploadPage() {
 
   return (
     <main style={{ maxWidth: 480 }}>
+      <p>
+        <Link href="/review">Review queue &rarr;</Link>
+      </p>
       <h1>Upload a document</h1>
       <p>Supported: PDF, PNG, JPG/JPEG. See docs/SRS.md for the full spec.</p>
 

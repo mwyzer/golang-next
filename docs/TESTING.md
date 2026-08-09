@@ -5,12 +5,27 @@ Verifies the [Implementation](IMPLEMENTATION.md) against the
 
 ## Test Levels
 
-| Level | Scope | Tooling |
-| --- | --- | --- |
-| Unit | Domain logic, individual agent tools (mocked LLM/OCR), validation rules | Go `testing` + `testify`; Frontend: Jest/Vitest |
-| Integration | API endpoints against a real Postgres (testcontainers), job queue processing | Go `testing` + `testcontainers-go` |
-| Agent | Full agent-run scenarios: happy path, low confidence → review, validation failure, iteration cap exceeded, tool timeout | Go, with a fake/stubbed LLM+OCR provider |
-| End-to-End | Upload → process → review → completed, through the API (and optionally the UI) | Playwright or Go E2E harness |
+| Level | Scope | Tooling | Status |
+| --- | --- | --- | --- |
+| Unit | Validation rules, LLM stub provider, upload MIME/size validation | Go `testing` + `testify` | `internal/validation`, `internal/providers/llm`, `internal/api` (`validate_test.go`) |
+| Integration | Every `internal/db` repo, plus API endpoints (upload/get/review/queue/auth) against a real Postgres | Go `testing` + `testcontainers-go` | `internal/db/integration_test.go`, `internal/api/integration_test.go` |
+| Agent | Full agent-run scenarios: auto-process happy path, all four review-routing reasons (unknown type, validation failed, duplicate, low confidence), max-iterations exceeded, OCR failure | Go, with a fake `llm.Provider`/`ocr.Provider` | `internal/agent/runner_integration_test.go` |
+| End-to-End | Upload → process → review → completed, through the UI | Not yet implemented | — |
+
+Frontend (`web/`) has no test suite yet — CI only runs a type check and
+production build (`npx tsc --noEmit`, `npm run build`).
+
+Integration and agent tests are gated behind the `integration` build tag
+(`//go:build integration`) so `go test ./...` stays fast and
+Docker-free; run them explicitly with `go test -tags=integration ./...`.
+They share one Postgres testcontainer per test binary (`internal/testutil`,
+started once in each package's `TestMain`) using the same
+`pgvector/pgvector:pg16` image as `docker-compose.yml`, since the schema
+migration requires the `vector` extension. Each test resets the mutable
+tables (`documents`, `extracted_fields`, `agent_runs`, `tool_executions`,
+`review_tasks`, `audit_logs`, `knowledge_chunks`) before running, while
+leaving the seeded reference data (dev tenant, dev user, document types)
+in place.
 
 ## Coverage Targets
 
@@ -22,14 +37,21 @@ Verifies the [Implementation](IMPLEMENTATION.md) against the
 
 | Environment | Purpose |
 | --- | --- |
-| Local | Developer machine; Docker Compose for Postgres + queue |
-| CI | Ephemeral containers per PR run |
+| Local | Developer machine; `go test -tags=integration ./...` starts its own testcontainer (Docker Compose only needed for running the app itself) |
+| CI | GitHub Actions (`.github/workflows/ci.yml`), ephemeral testcontainers per run |
 | Staging | Pre-production, using real (non-production) provider credentials |
 
 ## CI Gate
 
-- Lint, unit tests, and integration tests must pass before merge.
-- Agent-run tests must pass with zero unbounded loops (iteration cap enforced) and zero unregistered tool calls.
+`.github/workflows/ci.yml` runs three jobs on every push/PR to `master`:
+
+- **go**: `go build`, `gofmt -l` (fails on unformatted files), `go vet`, `go test ./...` (unit tests).
+- **go-integration**: `go test -tags=integration ./...` — the full `internal/db`, `internal/agent`, and `internal/api` suites against real testcontainers.
+- **web**: `npm ci`, `npx tsc --noEmit`, `npm run build`.
+
+Agent-run tests must pass with zero unbounded loops (iteration cap
+enforced, see `TestRunner_MaxIterationsExceeded`) and zero unregistered
+tool calls.
 
 ---
 

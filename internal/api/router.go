@@ -15,10 +15,17 @@ type Deps struct {
 	AgentRuns       *db.AgentRunRepo
 	ToolExecs       *db.ToolExecutionRepo
 	ExtractedFields *db.ExtractedFieldRepo
+	Reviews         *db.ReviewTaskRepo
+	Users           *db.UserRepo
+	Audit           *db.AuditLogRepo
 	Store           storage.Store
 	MaxUploadSize   int64
 	APIToken        string
 }
+
+// reviewerRoles gates POST /documents/{id}/review and GET /review-queue
+// (SRS Feature: Human Review — "only authorized reviewers").
+var reviewerRoles = []string{"reviewer", "admin"}
 
 func NewRouter(deps Deps) http.Handler {
 	docs := &DocumentsHandler{
@@ -28,6 +35,12 @@ func NewRouter(deps Deps) http.Handler {
 		ExtractedFields: deps.ExtractedFields,
 		Store:           deps.Store,
 		MaxUploadSize:   deps.MaxUploadSize,
+	}
+	reviews := &ReviewHandler{
+		Documents:       deps.Repo,
+		Reviews:         deps.Reviews,
+		ExtractedFields: deps.ExtractedFields,
+		Audit:           deps.Audit,
 	}
 
 	r := chi.NewRouter()
@@ -45,6 +58,12 @@ func NewRouter(deps Deps) http.Handler {
 		r.Post("/documents", docs.Upload)
 		r.Get("/documents/{id}", docs.Get)
 		r.Get("/documents/{id}/agent-runs", docs.ListAgentRuns)
+
+		r.Group(func(r chi.Router) {
+			r.Use(RequireRole(deps.Users, reviewerRoles...))
+			r.Post("/documents/{id}/review", reviews.Submit)
+			r.Get("/review-queue", reviews.Queue)
+		})
 	})
 
 	return r

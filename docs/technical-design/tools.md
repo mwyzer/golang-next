@@ -9,22 +9,22 @@ engineering tooling, not agent-callable tools.
 
 | Tool/Library | Purpose | Notes |
 | --- | --- | --- |
-| `chi` or `gin` | HTTP router/API framework | Pick one; keep handlers thin |
-| `pgx` | PostgreSQL driver | Used directly or via `sqlx` |
-| `golang-migrate` or `atlas` | Schema migrations | See [DB design](db.md) |
-| `river` or `asynq` | Background job queue for async processing | Satisfies FR-26, NFR-15 |
-| `zerolog` or `slog` | Structured logging with trace IDs | Satisfies NFR-18, NFR-19 |
-| `testify` | Unit/integration test assertions and mocks | |
-| LLM SDK (provider-specific) | Classification, extraction, reasoning calls | Abstracted behind a provider interface (NFR-17) |
-| OCR client (provider-specific or local) | Text extraction from images/PDFs | Abstracted behind a provider interface (NFR-17) |
+| `chi` | HTTP router/API framework | Decided |
+| `pgx` | PostgreSQL driver | Used directly (no ORM/query builder) |
+| Custom embedded-SQL runner (`internal/db/migrate.go`) | Schema migrations | Not `golang-migrate`/`atlas` — a small custom runner applies `db/migrations/*.up.sql` in filename order via a `schema_migrations` table, embedded into the binary with `//go:embed`. Runs automatically on `cmd/api`/`cmd/worker` startup. |
+| No separate queue library | Async processing | Satisfies FR-26, NFR-15 without a dedicated queue: the worker claims the oldest `UPLOADED` document with `SELECT ... FOR UPDATE SKIP LOCKED` directly against Postgres — see [System Architecture](../architecture/system-architecture.md) for why a queue (`river`/`asynq`/Redis) wasn't needed at this scale |
+| Standard library `log` | Logging | Not `zerolog`/`slog` — plain `log.Printf`, correlated by agent run ID (`agent_runs.trace_id` exists in the schema but isn't yet threaded into log lines; partially satisfies NFR-18/NFR-19) |
+| `testify` | Unit/integration test assertions | `assert`/`require` only, no mocking — integration tests run against a real Postgres via `testcontainers-go` |
+| LLM SDK (provider-specific) | Classification, extraction, reasoning calls | Abstracted behind `llm.Provider`; only `llm.StubProvider` (keyword/heuristic) ships today — no real LLM wired in (NFR-17, PRD Open Questions) |
+| OCR client (provider-specific or local) | Text extraction from images/PDFs | Abstracted behind `ocr.Provider`; only `ocr.StubProvider` (reads raw file bytes as text) ships today — no real OCR wired in (NFR-17, PRD Open Questions) |
 
 ## Frontend (Next.js)
 
 | Tool/Library | Purpose | Notes |
 | --- | --- | --- |
-| Next.js (TypeScript) | Upload UI, status views, review queue | App Router recommended |
-| A data-fetching library (e.g. TanStack Query) | Polling document status, mutations for review actions | |
-| A UI component library | Forms, tables, review screens | Choice open |
+| Next.js (TypeScript), App Router | Upload UI, status views, review queue | Decided |
+| Plain `fetch` (`web/lib/api.ts`) | Polling document status, mutations for review actions | No data-fetching library (e.g. TanStack Query) — manual `useState`/`useEffect` |
+| None | Forms, tables, review screens | Plain inline styles, no UI component library |
 
 ## External Services
 
@@ -38,11 +38,11 @@ engineering tooling, not agent-callable tools.
 
 | Tool | Purpose |
 | --- | --- |
-| Linting | `golangci-lint` (Go), ESLint (Next.js) |
-| Formatting | `gofmt`/`goimports` (Go), Prettier (Next.js) |
-| CI | Run lint, unit tests, and build on every PR (see [Testing](../TESTING.md)) |
+| Linting | `go vet` + `gofmt -l` (Go — no `golangci-lint` configured); ESLint via `next lint` (Next.js) |
+| Formatting | `gofmt` (Go), no Prettier config (Next.js) |
+| CI | `.github/workflows/ci.yml`: build/vet/gofmt/unit tests, `testcontainers-go` integration tests, E2E tests, and the Next.js lint/typecheck/test/build job on every push/PR (see [Testing](../TESTING.md)) |
 | Docker | Containerizes the API server, agent worker, and frontend (NFR-21) |
-| Docker Compose | Runs the full local stack (API, worker, frontend, Postgres, queue) with one command (NFR-22) |
+| Docker Compose | Runs the full local stack (API, worker, frontend, Postgres) with one command — no separate queue service (NFR-22) |
 
 ---
 

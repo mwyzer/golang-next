@@ -72,6 +72,58 @@ sequenceDiagram
 - **Frontend**: Next.js (App Router), React
 - **OCR / LLM**: pluggable `Provider` interfaces; stub implementations ship by default (see [docs/PRD.md](docs/PRD.md) Open Questions)
 
+## Architecture
+
+**System context** — see [docs/architecture/system-architecture.md](docs/architecture/system-architecture.md)
+for the full component breakdown. There's no separate job queue: the
+worker claims documents by polling Postgres directly with
+`SELECT ... FOR UPDATE SKIP LOCKED`, which is enough to safely dequeue
+across multiple worker instances at this scale.
+
+```mermaid
+flowchart LR
+    User((User)) --> Frontend[Next.js Frontend]
+    Reviewer((Reviewer)) --> Frontend
+    Frontend --> API[Go API Server]
+    API --> DB[(PostgreSQL)]
+    Worker[Go Agent Worker] -->|polls for UPLOADED documents| DB
+    Worker --> LLM[[LLM Provider]]
+    Worker --> OCR[[OCR Provider]]
+    Worker -.future.-> VectorDB[(pgvector RAG Store)]
+    API --> Storage[(Object Storage)]
+    Worker --> Storage
+```
+
+**Agent pipeline** — see [docs/architecture/agent-architecture.md](docs/architecture/agent-architecture.md)
+for the tool registry and guardrails (iteration cap, tool allowlist,
+timeouts). Routing to `PENDING_REVIEW` is a normal, successful outcome;
+only an unrecoverable error or exceeding the iteration cap fails the
+run.
+
+```mermaid
+flowchart TD
+    Start([Document claimed: UPLOADED]) --> OCR[run_ocr]
+    OCR --> Classify[classify_document]
+    Classify -->|type = unknown| Review([PENDING_REVIEW])
+    Classify -->|classified| Extract[extract_fields]
+    Extract --> Validate[validate_extraction]
+    Validate -->|violations found| Review
+    Validate -->|valid| Dedup[check_duplicate]
+    Dedup -->|exact or near-duplicate match| Review
+    Dedup -->|unique| Confidence[calculate_confidence]
+    Confidence -->|below auto-process threshold| Review
+    Confidence -->|>= threshold| Finalize[finalize_document]
+    Finalize --> Done([AUTO_PROCESSED])
+
+    OCR -.error, or iteration cap exceeded.-> Failed([FAILED])
+    Classify -.error, or iteration cap exceeded.-> Failed
+    Extract -.error, or iteration cap exceeded.-> Failed
+    Validate -.iteration cap exceeded.-> Failed
+    Dedup -.error, or iteration cap exceeded.-> Failed
+    Confidence -.error, or iteration cap exceeded.-> Failed
+    Finalize -.error, or iteration cap exceeded.-> Failed
+```
+
 ## Repo layout
 
 ```text

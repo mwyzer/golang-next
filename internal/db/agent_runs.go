@@ -31,6 +31,22 @@ func (r *AgentRunRepo) Finish(ctx context.Context, id string, status domain.Agen
 	return nil
 }
 
+// CountFailed returns how many agent runs for a document have finished
+// FAILED, used to decide whether a failure is still within the bounded
+// retry budget (FR-27, NFR-11: "recoverable processing failures SHALL
+// support retry... bounded").
+func (r *AgentRunRepo) CountFailed(ctx context.Context, documentID string) (int, error) {
+	var count int
+	err := r.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM agent_runs WHERE document_id = $1 AND status = $2`,
+		documentID, domain.AgentRunFailed,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count failed agent runs: %w", err)
+	}
+	return count, nil
+}
+
 // ListByDocument returns agent runs for a document, most recent first.
 func (r *AgentRunRepo) ListByDocument(ctx context.Context, documentID string) ([]domain.AgentRun, error) {
 	rows, err := r.pool.Query(ctx, `

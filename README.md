@@ -238,6 +238,7 @@ export DATABASE_URL="postgres://docagent:docagent@localhost:5433/docagent?sslmod
 | `POLL_INTERVAL_SECONDS` | `3` | Worker backoff between empty polls |
 | `MAX_AGENT_ITERATIONS` | `10` | Cap on pipeline steps per agent run |
 | `TOOL_TIMEOUT_SECONDS` | `30` | Timeout for each OCR/LLM provider call; `0` disables it |
+| `MAX_RETRIES` | `2` | Bounded retries for a recoverable agent-run failure (3 total attempts); `0` disables retry |
 
 The web app reads `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_API_TOKEN`.
 

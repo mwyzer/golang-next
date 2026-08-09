@@ -53,6 +53,13 @@ type Runner struct {
 	// Zero disables the timeout (NFR-3: "Agent tool calls SHALL have
 	// configurable timeouts" — configurable includes "off").
 	ToolTimeout time.Duration
+	// MaxRetries bounds how many times a document is requeued to
+	// UPLOADED after a recoverable failure (FR-27, NFR-11). Zero means
+	// no retries — the first failure is terminal, matching the prior
+	// behavior. max_iterations_exceeded is never retried regardless of
+	// this setting: a low iteration cap is a configuration issue, not a
+	// transient one, so retrying would just fail the same way again.
+	MaxRetries int
 }
 
 // PollOnce claims and fully processes at most one UPLOADED document. It
@@ -377,12 +384,36 @@ func (r *Runner) routeToReview(ctx context.Context, tenantID, documentID, agentR
 	log.Printf("agent run %s: document %s routed to human review (%s)", agentRunID, documentID, reason)
 }
 
+// fail finishes the agent run as FAILED, then either requeues the
+// document to UPLOADED for a retry (recoverable failure, still within
+// the retry budget) or marks it permanently FAILED (FR-27, NFR-11:
+// "recoverable processing failures SHALL support retry... bounded").
 func (r *Runner) fail(ctx context.Context, tenantID, documentID, agentRunID string, iterations int, reason string) {
-	if err := r.Documents.MarkFailed(ctx, documentID); err != nil {
-		log.Printf("agent run %s: mark failed: %v", agentRunID, err)
-	}
 	if err := r.AgentRuns.Finish(ctx, agentRunID, domain.AgentRunFailed, iterations); err != nil {
 		log.Printf("agent run %s: finish: %v", agentRunID, err)
+	}
+
+	if reason != "max_iterations_exceeded" {
+		attempts, err := r.AgentRuns.CountFailed(ctx, documentID)
+		if err != nil {
+			log.Printf("agent run %s: count failed attempts: %v", agentRunID, err)
+		} else if attempts <= r.MaxRetries {
+			if err := r.Documents.MarkUploaded(ctx, documentID); err != nil {
+				log.Printf("agent run %s: requeue for retry: %v", agentRunID, err)
+			}
+			if tenantID != "" {
+				_ = r.Audit.Record(ctx, tenantID, auditActorAgent, "agent_run.retrying",
+					domain.AuditEntityAgentRun, agentRunID,
+					map[string]any{"reason": reason, "document_id": documentID, "attempt": attempts, "max_retries": r.MaxRetries})
+			}
+			log.Printf("agent run %s: document %s failed (%s), retrying (attempt %d of %d)",
+				agentRunID, documentID, reason, attempts, r.MaxRetries+1)
+			return
+		}
+	}
+
+	if err := r.Documents.MarkFailed(ctx, documentID); err != nil {
+		log.Printf("agent run %s: mark failed: %v", agentRunID, err)
 	}
 	if tenantID != "" {
 		_ = r.Audit.Record(ctx, tenantID, auditActorAgent, "agent_run.failed",

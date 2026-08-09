@@ -14,6 +14,7 @@ type Config struct {
 	PollIntervalSecs   int64
 	MaxAgentIterations int64
 	ToolTimeoutSecs    int64
+	MaxRetries         int64
 }
 
 func Load() Config {
@@ -26,6 +27,7 @@ func Load() Config {
 		PollIntervalSecs:   getEnvInt64("POLL_INTERVAL_SECONDS", 3),
 		MaxAgentIterations: getEnvInt64("MAX_AGENT_ITERATIONS", 10), // full pipeline is 7 steps; leaves headroom
 		ToolTimeoutSecs:    getEnvInt64("TOOL_TIMEOUT_SECONDS", 30), // bounds each OCR/LLM provider call (NFR-3)
+		MaxRetries:         getEnvInt64("MAX_RETRIES", 2),           // bounded retry for recoverable failures (FR-27, NFR-11)
 	}
 }
 

@@ -52,6 +52,7 @@ func main() {
 		LLM:             llm.StubProvider{},
 		MaxIterations:   int(cfg.MaxAgentIterations),
 		ToolTimeout:     time.Duration(cfg.ToolTimeoutSecs) * time.Second,
+		MaxRetries:      int(cfg.MaxRetries),
 	}
 
 	pollInterval := time.Duration(cfg.PollIntervalSecs) * time.Second

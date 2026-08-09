@@ -492,6 +492,54 @@ func TestClaimNextUploaded(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestDocumentRepo_MarkUploaded(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	repo := db.NewDocumentRepo(pool)
+
+	doc := newDocument(t, repo, nil)
+	require.NoError(t, repo.MarkFailed(ctx, doc.ID))
+
+	require.NoError(t, repo.MarkUploaded(ctx, doc.ID))
+
+	got, err := repo.GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusUploaded, got.Status)
+}
+
+func TestAgentRunRepo_CountFailed(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	docs := db.NewDocumentRepo(pool)
+	runs := db.NewAgentRunRepo(pool)
+
+	doc := newDocument(t, docs, nil)
+
+	count, err := runs.CountFailed(ctx, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	_, agentRunID1, ok, err := db.ClaimNextUploaded(ctx, pool, 10)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, runs.Finish(ctx, agentRunID1, domain.AgentRunFailed, 3))
+
+	count, err = runs.CountFailed(ctx, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	// A COMPLETED retry attempt must not inflate the failed total.
+	require.NoError(t, docs.MarkUploaded(ctx, doc.ID))
+	_, agentRunID2, ok, err := db.ClaimNextUploaded(ctx, pool, 10)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, runs.Finish(ctx, agentRunID2, domain.AgentRunCompleted, 7))
+
+	count, err = runs.CountFailed(ctx, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
 func TestMigrate_IsIdempotent(t *testing.T) {
 	// Applying migrations again against an already-migrated database
 	// must be a no-op, not an error (workers and the API both call

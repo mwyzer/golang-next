@@ -87,6 +87,22 @@ func (f fakeOCR) ExtractText(ctx context.Context, _ string) (string, error) {
 	return f.text, f.err
 }
 
+// flakyOCR fails on the first N calls, then succeeds — used to test
+// the retry-then-succeed path without a real transient failure.
+// Single-threaded use only (tests call PollOnce synchronously).
+type flakyOCR struct {
+	remainingFailures *int
+	text              string
+}
+
+func (f flakyOCR) ExtractText(context.Context, string) (string, error) {
+	if *f.remainingFailures > 0 {
+		*f.remainingFailures--
+		return "", assert.AnError
+	}
+	return f.text, nil
+}
+
 // waitOrCancel blocks for delay, returning early with ctx.Err() if the
 // context is cancelled (e.g. by Runner.ToolTimeout) first.
 func waitOrCancel(ctx context.Context, delay time.Duration) error {
@@ -548,6 +564,137 @@ func TestRunner_ToolTimeout_ZeroMeansDisabled(t *testing.T) {
 	got, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusAutoProcessed, got.Status)
+}
+
+func TestRunner_RetryOnRecoverableFailure_ThenSucceeds(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	doc := uploadDocument(t, nil)
+
+	remaining := 1 // fail once, then succeed
+	r := newRunner(
+		flakyOCR{remainingFailures: &remaining, text: "invoice text"},
+		fakeLLM{
+			classifyResult: llm.ClassifyResult{DocumentType: domain.DocumentTypeInvoice, Confidence: 0.95},
+			extractFields:  validInvoiceFields(0.95),
+		},
+		10,
+	)
+	r.MaxRetries = 2
+
+	// First attempt fails but is within the retry budget: requeued to
+	// UPLOADED, not left permanently FAILED.
+	processed, err := r.PollOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, processed)
+
+	afterFirst, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusUploaded, afterFirst.Status,
+		"a recoverable failure within the retry budget should requeue the document, not fail it permanently")
+
+	runs, err := db.NewAgentRunRepo(pool).ListByDocument(ctx, doc.ID)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, domain.AgentRunFailed, runs[0].Status)
+	assert.Equal(t, "ocr_failed", auditReason(t, domain.AuditEntityAgentRun, runs[0].ID))
+
+	// Second attempt reclaims the same document (it's the oldest
+	// UPLOADED one again) and succeeds now that the fake's failure
+	// budget is spent.
+	processed, err = r.PollOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, processed)
+
+	final, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusAutoProcessed, final.Status)
+
+	runs, err = db.NewAgentRunRepo(pool).ListByDocument(ctx, doc.ID)
+	require.NoError(t, err)
+	assert.Len(t, runs, 2, "the retry should open a second, separate agent run")
+}
+
+func TestRunner_RetryExhausted_ThenPermanentlyFails(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	doc := uploadDocument(t, nil)
+
+	r := newRunner(fakeOCR{err: assert.AnError}, fakeLLM{}, 10)
+	r.MaxRetries = 1 // 2 total attempts allowed
+
+	// Attempt 1: fails, within budget, requeued.
+	processed, err := r.PollOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, processed)
+	mid, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusUploaded, mid.Status)
+
+	// Attempt 2: fails again, budget exhausted, permanently FAILED.
+	processed, err = r.PollOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, processed)
+
+	final, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusFailed, final.Status)
+
+	runs, err := db.NewAgentRunRepo(pool).ListByDocument(ctx, doc.ID)
+	require.NoError(t, err)
+	require.Len(t, runs, 2)
+	for _, run := range runs {
+		assert.Equal(t, domain.AgentRunFailed, run.Status)
+	}
+
+	failedCount, err := db.NewAgentRunRepo(pool).CountFailed(ctx, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, failedCount)
+}
+
+func TestRunner_MaxIterationsExceeded_NeverRetries(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	doc := uploadDocument(t, nil)
+
+	r := newRunner(
+		fakeOCR{text: "invoice text"},
+		fakeLLM{classifyResult: llm.ClassifyResult{DocumentType: domain.DocumentTypeInvoice, Confidence: 0.95}},
+		2,
+	)
+	r.MaxRetries = 5 // even with plenty of retry budget available...
+
+	processed, err := r.PollOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, processed)
+
+	got, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusFailed, got.Status,
+		"max_iterations_exceeded must never be retried, regardless of MaxRetries")
+
+	runs, err := db.NewAgentRunRepo(pool).ListByDocument(ctx, doc.ID)
+	require.NoError(t, err)
+	assert.Len(t, runs, 1)
+}
+
+func TestRunner_MaxRetries_ZeroMeansNoRetry(t *testing.T) {
+	// The zero value of MaxRetries preserves the pre-retry-policy
+	// behavior: the first failure is immediately terminal.
+	reset(t)
+	ctx := context.Background()
+	doc := uploadDocument(t, nil)
+
+	r := newRunner(fakeOCR{err: assert.AnError}, fakeLLM{}, 10)
+	// r.MaxRetries left at its zero value.
+
+	processed, err := r.PollOnce(ctx)
+	require.NoError(t, err)
+	require.True(t, processed)
+
+	got, err := db.NewDocumentRepo(pool).GetByID(ctx, devTenantID, doc.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusFailed, got.Status)
 }
 
 func TestRunner_OCRFailure(t *testing.T) {

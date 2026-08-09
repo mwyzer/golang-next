@@ -52,6 +52,12 @@ next tool. Routing to `PENDING_REVIEW` is a normal, successful outcome
 unrecoverable error or exceeding `max_agent_iterations` fails the run
 (FR-20, FR-21, NFR-13).
 
+`FAILED` above is this **run's** terminal state, not necessarily the
+**document's**: unless the failure was `max_iterations_exceeded`, the
+document is requeued to `UPLOADED` and a brand new run starts this
+same diagram over from `run_ocr`, until `Runner.MaxRetries` is
+exhausted — see Guardrails below.
+
 ## Tools / Capabilities Available to Agents
 
 | Tool | Purpose | High-risk? |
@@ -67,10 +73,13 @@ unrecoverable error or exceeding `max_agent_iterations` fails the run
 | `finalize_document` | Mark a document as auto-processed and persist approved data | Yes — requires confidence + validation to pass |
 
 Tools are registered in a central **Tool Registry** with a declared input
-schema, output schema, and timeout. The agent can only invoke tools
-present in the registry (NFR-7); each invocation has a configurable
-timeout (NFR-3) and is retried according to a bounded policy only when
-the tool is marked idempotent/retryable (NFR-11).
+schema and output schema. The agent can only invoke tools present in
+the registry (NFR-7); the three tools that call an external provider
+(`run_ocr`, `classify_document`, `extract_fields`) also have a
+configurable timeout (NFR-3). Retry (NFR-11) happens at the **agent
+run** level, not per-tool: a recoverable failure requeues the whole
+document to run the pipeline again from `run_ocr`, up to
+`Runner.MaxRetries` times — see Guardrails below.
 
 ## Guardrails & Failure Modes
 
@@ -78,7 +87,8 @@ the tool is marked idempotent/retryable (NFR-11).
 - **Iteration cap:** every agent run has a maximum iteration count; exceeding it fails the run rather than looping indefinitely (FR-21, NFR-13).
 - **Human approval for high-risk actions:** `finalize_document` (committing data as approved) and any future destructive action require the preceding validation/confidence gates to pass, or the run is routed to human review instead (NFR-8).
 - **Timeouts:** the three tools that call an external provider (`run_ocr`, `classify_document`, `extract_fields`) are bounded by `Runner.ToolTimeout` (configurable via `TOOL_TIMEOUT_SECONDS`, default 30s, `0` disables it). A timeout is recorded as a `TIMEOUT` tool execution — distinct from `FAILED` — and fails the agent run the same way any other tool error does (NFR-3). The remaining four tools are deterministic/DB-only and aren't independently timeout-bounded.
-- **Idempotency:** re-processing the same document (e.g. after a retry) must not create duplicate side effects — tool executions are keyed by agent run + step (NFR-12).
+- **Bounded retry:** a recoverable failure (anything except `max_iterations_exceeded`, which indicates a configuration issue rather than a transient one) requeues the document to `UPLOADED` instead of leaving it `FAILED`, up to `Runner.MaxRetries` times (configurable via `MAX_RETRIES`, default 2 — i.e. 3 total attempts; `0` disables retry). Each retry opens a new, separate agent run; the failed run's own record is untouched (FR-27, NFR-11).
+- **Idempotency:** a retry reruns the whole pipeline from `run_ocr` in a new agent run, rather than resuming mid-pipeline. `extracted_fields`/`tool_executions`/`audit_logs` are append-only, so an earlier partial attempt's rows aren't deleted or corrupted by the retry — reads resolve to the most recent row per field (`extracted_fields`) or the full history (`audit_logs`), so a retry is safe to observe even though it isn't strictly exactly-once at the row level (NFR-12).
 - **Full traceability:** every tool execution and state transition is recorded against the agent run's trace/execution ID for audit and debugging (NFR-10, NFR-18, NFR-19).
 
 ---

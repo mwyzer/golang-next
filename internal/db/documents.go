@@ -218,6 +218,23 @@ func (r *DocumentRepo) MarkFailed(ctx context.Context, id string) error {
 	return nil
 }
 
+// MarkUploaded resets a document back to UPLOADED after a recoverable
+// processing failure, so ClaimNextUploaded picks it up again on a
+// later poll instead of leaving it permanently FAILED (FR-27, NFR-11:
+// bounded retry for recoverable failures).
+func (r *DocumentRepo) MarkUploaded(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE documents
+		SET status = $1, updated_at = now()
+		WHERE id = $2`,
+		domain.StatusUploaded, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark document uploaded: %w", err)
+	}
+	return nil
+}
+
 // SetKeyFieldsHash persists a deterministic hash of a document's
 // extracted key fields, used for near-duplicate detection (FR-10, SRS
 // Feature: Duplicate Detection — "near-duplicates based on key fields

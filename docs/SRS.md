@@ -297,9 +297,9 @@ enterprise tenant administration.
   decoupling the upload request from the AI Agent workflow.
 
 - **Acceptance Criteria:**
-  - [ ] Upload requests return before agent processing completes.
-  - [ ] Processing status can be polled or retrieved via the API.
-  - [ ] Failed jobs are retried according to a bounded retry policy.
+  - [x] Upload requests return before agent processing completes. (`POST /documents` returns as soon as the row is created; the worker processes it asynchronously — see `e2e/e2e_test.go`.)
+  - [x] Processing status can be polled or retrieved via the API. (`GET /documents/{id}`.)
+  - [x] Failed jobs are retried according to a bounded retry policy. (`Runner.MaxRetries`, configurable via `MAX_RETRIES` — see [Agent Architecture](architecture/agent-architecture.md).)
 
 ## External Interface Requirements
 

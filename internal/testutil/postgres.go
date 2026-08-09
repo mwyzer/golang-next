@@ -1,9 +1,9 @@
-//go:build integration
+//go:build integration || e2e
 
 // Package testutil provides a Postgres testcontainer shared across all
 // tests in a single test binary (one per package: internal/db,
-// internal/agent, internal/api). Starting the container is slow, so
-// TestMain calls StartShared once and every test resets just the
+// internal/agent, internal/api, e2e). Starting the container is slow,
+// so TestMain calls StartShared once and every test resets just the
 // mutable tables via Reset instead of paying startup cost per test.
 package testutil
 

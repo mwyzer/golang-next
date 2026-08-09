@@ -46,6 +46,11 @@ processing while routing uncertain cases to human reviewers.
 | Administrator | Configure document workflows | Different document types can follow different processes |
 | Administrator | View audit logs | I can track what the AI agent did |
 
+All of the above are implemented end-to-end (upload → OCR → classify →
+extract → validate → confidence → auto-process/route to review → audit
+log) — see [Requirements](REQUIREMENTS.md) for the FR breakdown and
+[Implementation](IMPLEMENTATION.md) for status per requirement.
+
 ## Success Metrics
 
 | Metric | Target |
@@ -56,6 +61,10 @@ processing while routing uncertain cases to human reviewers.
 | Invalid tool call rate | < 1% |
 | Processing failure rate | < 5% |
 | Human review routing accuracy | >= 90% |
+
+Not yet measured — there's no metrics/observability pipeline reporting
+against these targets today (`agent_runs.trace_id` exists in the schema
+but isn't threaded into log lines yet; see [Tools](technical-design/tools.md)).
 
 ## Constraints & Assumptions
 
@@ -80,12 +89,34 @@ processing while routing uncertain cases to human reviewers.
 
 ## Open Questions
 
-- Which LLM provider should be used for the MVP?
-- Which OCR provider should be used?
+- ~~Which LLM provider should be used for the MVP?~~ **Resolved:** Anthropic
+  Claude. `llm.AnthropicProvider` (`internal/providers/llm/anthropic.go`)
+  implements `classify_document`/`extract_fields` via the Messages API,
+  forcing a single tool call per request so results are structured JSON.
+  It's opt-in via `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` (worker
+  falls back to `llm.StubProvider` — the default — when unset); see
+  [Tools](technical-design/tools.md) and the config table in
+  [README.md](../README.md). OCR remains unresolved below and is not yet
+  folded into this provider, even though Claude's vision input could
+  plausibly replace `ocr.StubProvider` in the future.
+- Which OCR provider should be used? **Still open.** `ocr.StubProvider`
+  (reads the raw file bytes as text — not real OCR) is the only
+  implementation; no external/local OCR engine is wired in.
 - Should document storage use local storage or S3-compatible storage?
-- Which document types should be prioritized after the MVP?
-- Should the system support multi-tenancy?
-- What actions require mandatory human approval?
+  **Still open as a decision**, though only local disk storage exists
+  today (`internal/storage/local.go`, `STORAGE_ROOT`) — no S3-compatible
+  backend has been written.
+- Which document types should be prioritized after the MVP? **Still
+  open.** No types beyond invoice/receipt/cv exist.
+- Should the system support multi-tenancy? **Still open.** `tenant_id`
+  is threaded through the schema and auth path (every query is
+  tenant-scoped), but only the one seeded dev tenant is ever used —
+  there's no tenant provisioning flow or a second tenant to test
+  isolation against.
+- What actions require mandatory human approval? **Still open as an
+  explicit policy**, though the routing gates that exist today (unknown
+  type, validation failure, duplicate, low confidence → `PENDING_REVIEW`)
+  already function as a de facto answer for those specific cases.
 
 ---
 

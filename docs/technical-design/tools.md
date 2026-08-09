@@ -15,7 +15,7 @@ engineering tooling, not agent-callable tools.
 | No separate queue library | Async processing | Satisfies FR-26, NFR-15 without a dedicated queue: the worker claims the oldest `UPLOADED` document with `SELECT ... FOR UPDATE SKIP LOCKED` directly against Postgres — see [System Architecture](../architecture/system-architecture.md) for why a queue (`river`/`asynq`/Redis) wasn't needed at this scale |
 | Standard library `log` | Logging | Not `zerolog`/`slog` — plain `log.Printf`, correlated by agent run ID (`agent_runs.trace_id` exists in the schema but isn't yet threaded into log lines; partially satisfies NFR-18/NFR-19) |
 | `testify` | Unit/integration test assertions | `assert`/`require` only, no mocking — integration tests run against a real Postgres via `testcontainers-go` |
-| LLM SDK (provider-specific) | Classification, extraction, reasoning calls | Abstracted behind `llm.Provider`; only `llm.StubProvider` (keyword/heuristic) ships today — no real LLM wired in (NFR-17, PRD Open Questions) |
+| `github.com/anthropics/anthropic-sdk-go` | Classification, extraction, reasoning calls | Abstracted behind `llm.Provider`. `llm.StubProvider` (keyword/heuristic) is the default; `llm.AnthropicProvider` (`internal/providers/llm/anthropic.go`) is a real Claude-backed implementation, opt-in via `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` (`llm.NewProvider` picks between them — see `cmd/worker/main.go`). Resolves the LLM-provider PRD Open Question; satisfies NFR-17 (swappable behind the interface) |
 | OCR client (provider-specific or local) | Text extraction from images/PDFs | Abstracted behind `ocr.Provider`; only `ocr.StubProvider` (reads raw file bytes as text) ships today — no real OCR wired in (NFR-17, PRD Open Questions) |
 
 ## Frontend (Next.js)
@@ -30,7 +30,7 @@ engineering tooling, not agent-callable tools.
 
 | Service | Purpose | Auth Method |
 | --- | --- | --- |
-| LLM Provider (TBD — see PRD Open Questions) | Classification, structured extraction, reasoning | API key |
+| Anthropic Claude (opt-in — see `LLM_PROVIDER`) | Classification, structured extraction, reasoning | `ANTHROPIC_API_KEY` |
 | OCR Provider (TBD — see PRD Open Questions) | Text extraction from scanned/image documents | API key or local |
 | Object Storage (local disk / S3-compatible) | Original file storage | IAM credentials / local filesystem |
 

@@ -17,6 +17,9 @@ type Config struct {
 	ToolTimeoutSecs    int64
 	MaxRetries         int64
 	CORSAllowedOrigins []string
+	LLMProvider        string
+	AnthropicAPIKey    string
+	AnthropicModel     string
 }
 
 func Load() Config {
@@ -31,6 +34,9 @@ func Load() Config {
 		ToolTimeoutSecs:    getEnvInt64("TOOL_TIMEOUT_SECONDS", 30), // bounds each OCR/LLM provider call (NFR-3)
 		MaxRetries:         getEnvInt64("MAX_RETRIES", 2),           // bounded retry for recoverable failures (FR-27, NFR-11)
 		CORSAllowedOrigins: getEnvList("CORS_ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
+		LLMProvider:        getEnv("LLM_PROVIDER", "stub"), // "stub" or "anthropic"; see internal/providers/llm
+		AnthropicAPIKey:    getEnv("ANTHROPIC_API_KEY", ""),
+		AnthropicModel:     getEnv("ANTHROPIC_MODEL", "claude-opus-5"),
 	}
 }
 

@@ -39,6 +39,12 @@ func main() {
 		log.Fatalf("init storage: %v", err)
 	}
 
+	llmProvider, err := llm.NewProvider(cfg.LLMProvider, cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	if err != nil {
+		log.Fatalf("init LLM provider: %v", err)
+	}
+	log.Printf("LLM provider: %s", cfg.LLMProvider)
+
 	runner := &agent.Runner{
 		Pool:            pool,
 		Documents:       db.NewDocumentRepo(pool),
@@ -49,7 +55,7 @@ func main() {
 		Reviews:         db.NewReviewTaskRepo(pool),
 		Audit:           db.NewAuditLogRepo(pool),
 		OCR:             ocr.StubProvider{Store: store},
-		LLM:             llm.StubProvider{},
+		LLM:             llmProvider,
 		MaxIterations:   int(cfg.MaxAgentIterations),
 		ToolTimeout:     time.Duration(cfg.ToolTimeoutSecs) * time.Second,
 		MaxRetries:      int(cfg.MaxRetries),

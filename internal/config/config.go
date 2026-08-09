@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -15,6 +16,7 @@ type Config struct {
 	MaxAgentIterations int64
 	ToolTimeoutSecs    int64
 	MaxRetries         int64
+	CORSAllowedOrigins []string
 }
 
 func Load() Config {
@@ -28,6 +30,7 @@ func Load() Config {
 		MaxAgentIterations: getEnvInt64("MAX_AGENT_ITERATIONS", 10), // full pipeline is 7 steps; leaves headroom
 		ToolTimeoutSecs:    getEnvInt64("TOOL_TIMEOUT_SECONDS", 30), // bounds each OCR/LLM provider call (NFR-3)
 		MaxRetries:         getEnvInt64("MAX_RETRIES", 2),           // bounded retry for recoverable failures (FR-27, NFR-11)
+		CORSAllowedOrigins: getEnvList("CORS_ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
 	}
 }
 
@@ -48,4 +51,18 @@ func getEnvInt64(key string, fallback int64) int64 {
 		return fallback
 	}
 	return n
+}
+
+// getEnvList parses a comma-separated env var into a slice, trimming
+// whitespace around each entry.
+func getEnvList(key string, fallback []string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	parts := strings.Split(v, ",")
+	for i, p := range parts {
+		parts[i] = strings.TrimSpace(p)
+	}
+	return parts
 }

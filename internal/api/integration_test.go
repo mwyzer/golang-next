@@ -74,15 +74,16 @@ func newTestServerWithMaxUpload(t *testing.T, maxUploadSize int64) *httptest.Ser
 	require.NoError(t, err)
 
 	deps := api.Deps{
-		Repo:            db.NewDocumentRepo(pool),
-		AgentRuns:       db.NewAgentRunRepo(pool),
-		ToolExecs:       db.NewToolExecutionRepo(pool),
-		ExtractedFields: db.NewExtractedFieldRepo(pool),
-		Reviews:         db.NewReviewTaskRepo(pool),
-		Users:           db.NewUserRepo(pool),
-		Audit:           db.NewAuditLogRepo(pool),
-		Store:           store,
-		MaxUploadSize:   maxUploadSize,
+		Repo:               db.NewDocumentRepo(pool),
+		AgentRuns:          db.NewAgentRunRepo(pool),
+		ToolExecs:          db.NewToolExecutionRepo(pool),
+		ExtractedFields:    db.NewExtractedFieldRepo(pool),
+		Reviews:            db.NewReviewTaskRepo(pool),
+		Users:              db.NewUserRepo(pool),
+		Audit:              db.NewAuditLogRepo(pool),
+		Store:              store,
+		MaxUploadSize:      maxUploadSize,
+		CORSAllowedOrigins: []string{"http://example.com"},
 	}
 
 	srv := httptest.NewServer(api.NewRouter(deps))
@@ -179,6 +180,48 @@ func TestHealthz(t *testing.T) {
 	var body map[string]string
 	decodeJSON(t, resp, &body)
 	assert.Equal(t, "ok", body["status"])
+}
+
+// TestCORS_PreflightAllowsConfiguredOrigin is a regression test: the
+// web UI is served from a different origin/port than the API, and a
+// real browser blocks every cross-origin fetch with no server-side
+// error at all unless the API responds to the preflight OPTIONS
+// request with the right Access-Control-* headers. curl and Go's
+// http.Client don't enforce CORS, so this bug was invisible to every
+// other test in this suite — it was only caught by driving the actual
+// web UI in a real browser.
+func TestCORS_PreflightAllowsConfiguredOrigin(t *testing.T) {
+	reset(t)
+	srv := newTestServer(t)
+
+	req, err := http.NewRequest(http.MethodOptions, srv.URL+"/api/v1/documents", nil)
+	require.NoError(t, err)
+	req.Header.Set("Origin", "http://example.com") // matches newTestServer's CORSAllowedOrigins
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "Authorization,Content-Type")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, "http://example.com", resp.Header.Get("Access-Control-Allow-Origin"))
+	assert.Contains(t, resp.Header.Get("Access-Control-Allow-Methods"), "POST")
+}
+
+func TestCORS_RejectsUnconfiguredOrigin(t *testing.T) {
+	reset(t)
+	srv := newTestServer(t)
+
+	req, err := http.NewRequest(http.MethodOptions, srv.URL+"/api/v1/documents", nil)
+	require.NoError(t, err)
+	req.Header.Set("Origin", "http://not-allowed.example")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"))
 }
 
 func TestRequireAuth(t *testing.T) {

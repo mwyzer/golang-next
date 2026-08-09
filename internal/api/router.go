@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 
 	"golang-nextjs/internal/db"
 	"golang-nextjs/internal/storage"
@@ -20,6 +21,11 @@ type Deps struct {
 	Audit           *db.AuditLogRepo
 	Store           storage.Store
 	MaxUploadSize   int64
+	// CORSAllowedOrigins lets the web UI (served from a different
+	// origin/port than the API) call it from a browser at all —
+	// without this, every request the browser makes is blocked by the
+	// same-origin policy before it ever reaches RequireAuth.
+	CORSAllowedOrigins []string
 }
 
 // reviewerRoles gates POST /documents/{id}/review and GET /review-queue
@@ -53,6 +59,13 @@ func NewRouter(deps Deps) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   deps.CORSAllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type"},
+		AllowCredentials: false, // auth is a bearer token, not a cookie
+		MaxAge:           300,
+	}))
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

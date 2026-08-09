@@ -19,6 +19,7 @@ and satisfying FR-16 of [Requirements](../REQUIREMENTS.md).
   bootstrapping the seeded dev user's token from `API_TOKEN` on API
   startup (`cmd/api/main.go`) — there's no self-service signup/login.
 - Versioning strategy: URL-prefixed (`/api/v1`); breaking changes bump the prefix
+- CORS: the web UI is served from a different origin (`http://localhost:3000` by default) than the API (`http://localhost:8080`), so every route responds with `Access-Control-*` headers for origins in `CORS_ALLOWED_ORIGINS` (comma-separated, default `http://localhost:3000`). Only `GET`/`POST` and the `Authorization`/`Content-Type` headers are allowed — no cookies (`AllowCredentials: false`), since auth is a bearer token, not a session cookie.
 - Error format:
 
   ```json

@@ -47,15 +47,16 @@ func main() {
 	}
 
 	router := api.NewRouter(api.Deps{
-		Repo:            db.NewDocumentRepo(pool),
-		AgentRuns:       db.NewAgentRunRepo(pool),
-		ToolExecs:       db.NewToolExecutionRepo(pool),
-		ExtractedFields: db.NewExtractedFieldRepo(pool),
-		Reviews:         db.NewReviewTaskRepo(pool),
-		Users:           users,
-		Audit:           db.NewAuditLogRepo(pool),
-		Store:           store,
-		MaxUploadSize:   cfg.MaxUploadBytes,
+		Repo:               db.NewDocumentRepo(pool),
+		AgentRuns:          db.NewAgentRunRepo(pool),
+		ToolExecs:          db.NewToolExecutionRepo(pool),
+		ExtractedFields:    db.NewExtractedFieldRepo(pool),
+		Reviews:            db.NewReviewTaskRepo(pool),
+		Users:              users,
+		Audit:              db.NewAuditLogRepo(pool),
+		Store:              store,
+		MaxUploadSize:      cfg.MaxUploadBytes,
+		CORSAllowedOrigins: cfg.CORSAllowedOrigins,
 	})
 
 	log.Printf("api listening on :%s", cfg.Port)

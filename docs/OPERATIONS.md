@@ -3,6 +3,11 @@
 Running and maintaining the AI Document Processing Agent after
 [Deployment](DEPLOYMENT.md).
 
+For local development (starting/stopping the Docker Compose stack,
+rebuilding after code changes, scaling the worker), see the
+[README's "Operating with Docker Compose" section](../README.md#operating-with-docker-compose) —
+this document covers production operations.
+
 ## Monitoring & Alerting
 
 | Signal | Tool | Threshold | Alert Channel |

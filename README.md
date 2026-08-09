@@ -240,6 +240,53 @@ export DATABASE_URL="postgres://docagent:docagent@localhost:5433/docagent?sslmod
 
 The web app reads `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_API_TOKEN`.
 
+## Operating with Docker Compose
+
+Migrations run automatically on startup (`db.Migrate` is called from
+both `cmd/api/main.go` and `cmd/worker/main.go`) — there's no separate
+migrate step.
+
+| Task | Command |
+| --- | --- |
+| Start (foreground, see logs) | `docker compose up` |
+| Start (background/detached) | `docker compose up -d` |
+| Stop | `docker compose down` |
+| Stop **and wipe data** (Postgres volume, uploaded files) | `docker compose down -v` |
+| Rebuild after code changes | `docker compose up --build` |
+| Rebuild just one service | `docker compose build worker && docker compose up -d worker` |
+| Restart one service (no rebuild) | `docker compose restart api` |
+| Tail logs, all services | `docker compose logs -f` |
+| Tail logs, one service | `docker compose logs -f worker` |
+| Check what's running | `docker compose ps` |
+| Scale the worker | `docker compose up -d --scale worker=3` |
+
+The worker claims documents via `SELECT ... FOR UPDATE SKIP LOCKED`,
+so running more than one instance is safe.
+
+```bash
+# health check
+curl http://localhost:8080/healthz
+
+# upload a document (dev-token is the default API_TOKEN)
+curl -X POST http://localhost:8080/api/v1/documents \
+  -H "Authorization: Bearer dev-token" \
+  -F "file=@invoice.pdf"
+
+# check status
+curl http://localhost:8080/api/v1/documents/<document_id> \
+  -H "Authorization: Bearer dev-token"
+
+# connect to Postgres directly
+docker compose exec postgres psql -U docagent -d docagent
+```
+
+`worker` exposes no port — it's a pure background poller, nothing to
+curl. `web`'s `NEXT_PUBLIC_API_URL`/`NEXT_PUBLIC_API_TOKEN` are baked
+in at container start; if you change `API_TOKEN` in `.env`, update
+those too or the UI's requests will get `401`s. Uploaded files persist
+in the `uploads` named volume across restarts — only
+`docker compose down -v` clears them.
+
 ## Testing
 
 ```bash
